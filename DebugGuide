@@ -2,6 +2,7 @@
 luna-send -f -n 1 luna://com.webos.service.capture/executeOneShot '{"path":"/tmp/usb/sda/sda1/Xbox_001.jpg", "method":"DISPLAY", "captureInputSize":{"width":1920, "height":1080}, "width":1920, "height":1080, "format":"JPEG"}'
 
 
+luna-send -n 1 -f luna://com.webos.service.config/setConfigs '{"configs": {"system.collectDevLogs": true}}'
 
 
 

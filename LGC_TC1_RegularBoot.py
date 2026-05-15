@@ -367,7 +367,7 @@ def main():
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_path = os.path.join(
             "C:/Temp",
-            f"LGC_Perf_TC02_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
+            f"LGC_Perf_TC01_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")
@@ -375,33 +375,40 @@ def main():
         try:
             # Pre-conditions
             print("\n[PRE-CONDITION] Setting up test environment...")
-            send_key(ser, 'LiveTV', 0.5)
-            send_key(ser, 'Num_03', 0.5)
-            send_key(ser, 'Num_06', 0.5)
-            send_key(ser, 'DASH', 0.5)
-            send_key(ser, 'Num_01', 0.5)
+            send_key(ser, 'LiveTV', 3)
+            send_key(ser, 'Num_03', 1)
+            send_key(ser, 'Num_06', 1)
+            send_key(ser, 'DASH', 1)
+            send_key(ser, 'Num_01', 1)
             send_key(ser, 'OK', 2)
-            wait_with_countdown_noKeyInput(10, "Pre-load Channel")
-            
+            wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+
+
+            # Home for 1 min
+            send_key(ser, 'Home', 0)
+            wait_with_countdown_noKeyInput(60, "Power Stabilization")
+
+
+            # Pre-conditions
+            print("\n[PRE-CONDITION] Setting up test environment...")
+            send_key(ser, 'LiveTV', 3)
+            send_key(ser, 'Num_03', 1)
+            send_key(ser, 'Num_06', 1)
+            send_key(ser, 'DASH', 1)
+            send_key(ser, 'Num_01', 1)
+            send_key(ser, 'OK', 2)
+            wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+
+
             # AC Power cycle
             print("\n[AC POWER CYCLE] Starting power cycle...")
-            asyncio.run(run_ac_power_cycle(ip, 10))
+            asyncio.run(run_ac_power_cycle(ip, 60))
             wait_with_countdown_noKeyInput(60, "Power Stabilization")
             
-            # Navigate to app
-            send_key(ser, 'Home', 1)
-            send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'OK', 20)
+
             
-            # Clean state
-            send_shell_command_with_debug(ser, "stop preload-manager")
-            send_shell_command_with_debug(ser, 
-                "luna-send -n 1 -f luna://com.webos.applicationManager/closeByAppId "
-                "'{\"id\": \"com.webos.app.lgchannels\"}'")
-            
-            send_key(ser, 'Home', 1)
-            wait_with_countdown_noKeyInput(30, "Cool-down")
-            
+            # Navigate to LGC
+            send_key(ser, 'Home', 2)
             send_key(ser, 'DpadRt', 2)
             
             # Motion detection measurement
@@ -429,12 +436,6 @@ def main():
         # Wait before next run
         if run_idx < num_runs:
             wait_with_countdown_noKeyInput(10, "Interval between runs")
-
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'Back', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'OK', 2)
     
     # Summary
     print(f"\n{'='*60}")
