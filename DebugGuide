@@ -1,0 +1,99 @@
+■ Lunca Capture
+luna-send -f -n 1 luna://com.webos.service.capture/executeOneShot '{"path":"/tmp/usb/sda/sda1/Xbox_001.jpg", "method":"DISPLAY", "captureInputSize":{"width":1920, "height":1080}, "width":1920, "height":1080, "format":"JPEG"}'
+
+
+luna-send -n 1 -f luna://com.webos.service.config/setConfigs '{"configs": {"system.collectDevLogs": true}}'
+
+
+
+
+
+
+
+
+
+
+
+ares-generate -t basic ./plutoVerify
+
+PS C:\webOSdev\pluto> ares-install --device verify ./com.plutoverifystream.app_1.0.0_all.ipk
+[Info] Set target device : verify
+ares-install ERR! [Tips]: Connection timed out. Please check the device IP address or the port number
+PS C:\webOSdev\pluto> ares-novacom --device verify --getkey
+ares-novacom ERR! [Tips]: Failed to get ssh private key
+PS C:\webOSdev\pluto> 
+ *  History restored 
+
+PS C:\Users\peter.si\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Python 3.13> cd /
+PS C:\> cd /webOSdev
+PS C:\webOSdev> cd pluto
+PS C:\webOSdev\pluto> ares-install --device verify ./com.plutoverifystream.app_1.0.0_all.ipk
+[Info] Set target device : verify
+ares-install ERR! [Tips]: Connection timed out. Please check the device IP address or the port number
+PS C:\webOSdev\pluto> ping 10.225.65.33
+
+Pinging 10.225.65.33 with 32 bytes of data:
+Reply from 10.225.65.33: bytes=32 time=2ms TTL=63
+Reply from 10.225.65.33: bytes=32 time=2ms TTL=63
+
+Ping statistics for 10.225.65.33:
+    Packets: Sent = 2, Received = 2, Lost = 0 (0% loss),
+Approximate round trip times in milli-seconds:
+    Minimum = 2ms, Maximum = 2ms, Average = 2ms
+Control-C
+PS C:\webOSdev\pluto> ares-setup-device                                                     
+name                deviceinfo                  connection  profile  passphrase
+------------------  --------------------------  ----------  -------  ----------
+verify              prisoner@10.225.65.33:9922  ssh         tv       B6037F    
+emulator (default)  developer@127.0.0.1:6622    ssh         tv                 
+
+** You can modify the device info in the above list, or add new device.
+? Select remove
+? Select a device verify
+? Save ? Yes
+name                deviceinfo                connection  profile  passphrase
+------------------  ------------------------  ----------  -------  ----------
+emulator (default)  developer@127.0.0.1:6622  ssh         tv                 
+
+PS C:\webOSdev\pluto> ares-setup-device
+name                deviceinfo                connection  profile  passphrase
+------------------  ------------------------  ----------  -------  ----------
+emulator (default)  developer@127.0.0.1:6622  ssh         tv                 
+
+** You can modify the device info in the above list, or add new device.
+? Select add
+? Enter Device Name: test
+? Enter Device IP address: 10.225.65.33
+? Enter Device Port: 9922
+? Enter ssh user: prisoner
+? Enter description: new device description
+? Set default ? Yes
+? Save ? Yes
+name            deviceinfo                  connection  profile  passphrase
+--------------  --------------------------  ----------  -------  ----------
+test (default)  prisoner@10.225.65.33:9922  ssh         tv                 
+emulator        developer@127.0.0.1:6622    ssh         tv                 
+
+** After adding your device, you'll need to get the key file from your webOS TV.
+ Follow these steps:
+ 1. Ensure that the key server button in the Developer Mode app on your webOS TV is enabled.
+ 2. Run the command "ares-novacom --device test --getkey" to retrieve the key file from your webOS TV.
+ 3. Enter the passphrase displayed in the Developer Mode app into the prompt.
+ For more details, refer to the https://webostv.developer.lge.com/develop/getting-started/developer-mode-app
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> ares-novacom --device test --getkey
+SSH Private Key: C:\Users\peter.si\.ssh\test_webos
+input passphrase:B6037F
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> ares-novacom --device test --getkey
+SSH Private Key: C:\Users\peter.si\.ssh\test_webos
+input passphrase:B6037F
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> 
+PS C:\webOSdev\pluto> ares-setup-device        

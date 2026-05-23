@@ -18,7 +18,7 @@ def get_user_configuration():
     Interactive configuration input from user
     """
     print("\n" + "="*60)
-    print("  LG TV Cold Boot Performance Test - Configuration")
+    print("  LG TV Channel Zapping Performance Test - Configuration")
     print("="*60 + "\n")
     
     # Device IP
