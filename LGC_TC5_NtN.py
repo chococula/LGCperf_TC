@@ -424,14 +424,15 @@ def main():
     send_key(ser, 'Num_06', 1)
     send_key(ser, 'DASH', 1)
     send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+    send_key(ser, 'OK', 5)
+    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
 
-
+    """
     # AC Power cycle
     print("\n[AC POWER CYCLE] Starting power cycle...")
     asyncio.run(run_ac_power_cycle(ip, 60))
-    wait_with_countdown_noKeyInput(180, "Power Stabilization")
+    wait_with_countdown_noKeyInput(18, "Power Stabilization")
+    """
 
     # Launching PIP
     send_key(ser, 'Exit', 2)
@@ -441,8 +442,10 @@ def main():
 
     for key_name in channel_to_keys(native_previous_channel):
         send_key(ser, key_name, 2)
+    send_key(ser, 'OK', 5)
 
-    send_key(ser, 'ChDown', 10)
+    send_key(ser, 'Back', 5)
+    
 
 
     for run_idx in range(1, num_runs + 1):
@@ -460,21 +463,12 @@ def main():
         print(f"Output directory: {dir_path}")
         
         try:
-            # Set the TV to the native previous channel before measuring ChUp.
-            source_channel = native_previous_channel
-            target_channel = "ChUp"
-            print(f"[RUN {run_idx}] Native previous channel: {source_channel}")
-            for key_name in channel_to_keys(source_channel):
-                send_key(ser, key_name, 2)
-            send_key(ser, 'OK', 10)
+            send_key(ser, 'ChDown', 10)
 
-            # Measure from the moment ChUp is sent on the native previous channel.
-            trigger_key = target_channel
 
- 
             # Motion detection measurement
             result = perform_motion_detection(
-                ser, cap, run_idx, dir_path, timeout, config, trigger_key
+                ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp'
             )
             
             if result:
