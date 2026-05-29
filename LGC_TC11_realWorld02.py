@@ -280,6 +280,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
     #    cap.grab()
     
     # Send OK command to trigger action
+    winsound.Beep(800, 200)
     send_key(ser, 'OK', 0)
     ser.flush()
     start_time = time.perf_counter()
@@ -317,6 +318,8 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
             cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
             print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
+            winsound.Beep(1500, 250)
+            winsound.Beep(2500, 350)
             break
         
         # Timeout check
@@ -434,9 +437,15 @@ def main():
             send_key(ser, 'Home', 2)
             wait_with_countdown_noKeyInput(30, "Home Screen")
 
-            # Step 8: LG Channels (1st app) — focus then measure
-            print("\n[STEP 8] Entering LG Channels - measuring load time...")
+            # Step 8: PIP Launching
+            print("\n[STEP 8] Entering PIP. Switching before fullscreen...")
             send_key(ser, 'DpadDn', 2)
+            send_key(ser, 'OK', 1)
+
+            # Step 9: LG Channels (1st app)
+            print("\n[STEP 9] Entering LG Channels - measuring load time...")
+            send_key(ser, 'Home', 2)
+            send_key(ser, 'DpadRt', 2)
 
             result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
 

@@ -23,9 +23,9 @@ def get_user_configuration():
     
     # Device IP
     while True:
-        ip = input("Enter Device IP Address (default: 192.168.4.208): ").strip()
+        ip = input("Enter Device IP Address (default: 192.168.5.3): ").strip()
         if not ip:
-            ip = "192.168.4.208"
+            ip = "192.168.5.3"
             break
         if len(ip.split('.')) == 4:
             break
@@ -33,9 +33,9 @@ def get_user_configuration():
     
     # Serial Port
     while True:
-        port = input("Enter Serial Port (default: COM4): ").strip()
+        port = input("Enter Serial Port (default: COM10): ").strip()
         if not port:
-            port = "COM4"
+            port = "COM10"
             break
         if port.upper().startswith("COM"):
             break
@@ -45,14 +45,14 @@ def get_user_configuration():
     SoC = input("Enter SoC Model (default: O22N3): ").strip() or "O22N3"
     
     # Software Version
-    SWV = input("Enter Software Version (default: 33_30_97): ").strip() or "33_30_97"
+    SWV = input("Enter Software Version (default: 33.31.22): ").strip() or "33.31.22"
     
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4_0_7-2): ").strip() or "4_0_7-2"
+    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4.0.18-1"
 
     # Channel number
     while True:
-        native_previous_channel = input("Enter Native Previous Channel Number (default: 442): ").strip() or "442"
+        native_previous_channel = input("Enter Native Previous Channel Number (default: 443): ").strip() or "443"
         if any(char.isdigit() for char in native_previous_channel) and all(
             char.isdigit() or char == '-' for char in native_previous_channel
         ):
@@ -72,7 +72,7 @@ def get_user_configuration():
     # Timeout
     while True:
         try:
-            timeout = float(input("Enter timeout for motion detection in seconds (default: 20): ").strip() or "20")
+            timeout = float(input("Enter timeout for motion detection in seconds (default: 10): ").strip() or "10")
             if timeout > 0:
                 break
             print("❌ Please enter a positive number.")
@@ -321,6 +321,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
     #    cap.grab()
     
     # Send the final key to trigger action
+    winsound.Beep(800, 200)
     send_key(ser, trigger_key, 0)
     ser.flush()
     start_time = time.perf_counter()
@@ -359,6 +360,8 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
             cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
             print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
+            winsound.Beep(1500, 250)
+            winsound.Beep(2500, 350)
             break
         
         # Timeout check
@@ -457,7 +460,7 @@ def main():
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_path = os.path.join(
             "C:/Temp",
-            f"LGC_Perf_TC04_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
+            f"LGC_Perf_TC05_NtN_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")

@@ -42,13 +42,13 @@ def get_user_configuration():
         print("❌ Invalid port format. Use format like COM10.")
     
     # SoC
-    SoC = input("Enter SoC Model (default: O22): ").strip() or "O22"
+    SoC = input("Enter SoC Model (default: O22N3): ").strip() or "O22N3"
     
     # Software Version
     SWV = input("Enter Software Version (default: 33.31.24): ").strip() or "33.31.24"
     
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4.0.7-5): ").strip() or "4.0.7-5"
+    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4.0.18-1"
     
     # Number of runs
     while True:
@@ -88,7 +88,23 @@ def get_user_configuration():
         print(f"  {key.upper():<15}: {value}")
     print("="*60 + "\n")
     
-    confirm = input("Confirm and proceed? (Y/n): ").strip().lower()
+    # Pre-flight checklist
+    print("\n" + "="*60)
+    print("  Pre-flight Checklist")
+    print("="*60)
+    print("  App order on Home bar (left to right):")
+    print("    [1] LG Channels  [2] YouTube  [3] Netflix  [4] Amazon")
+    print("")
+    print("  Please confirm the following before proceeding:")
+    print("    ① Apps are arranged in the order above")
+    print("    ② YouTube / Netflix / Amazon are all signed in")
+    print("="*60)
+    checklist_ok = input("All items confirmed? (Y/n): ").strip().lower()
+    if checklist_ok == 'n':
+        print("❌ Please set up apps correctly and re-run.")
+        sys.exit(0)
+
+    confirm = input("Confirm configuration and proceed? (Y/n): ").strip().lower()
     if confirm != 'n':
         return config
     else:
@@ -264,6 +280,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
     #    cap.grab()
     
     # Send OK command to trigger action
+    winsound.Beep(800, 200)
     send_key(ser, 'OK', 0)
     ser.flush()
     start_time = time.perf_counter()
@@ -301,6 +318,8 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
             cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
             print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
+            winsound.Beep(1500, 250)
+            winsound.Beep(2500, 350)
             break
         
         # Timeout check
@@ -367,7 +386,7 @@ def main():
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_path = os.path.join(
             "C:/Temp",
-            f"LGC_Perf_TC02_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
+            f"LGC_Perf_TC10_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")

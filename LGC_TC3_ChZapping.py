@@ -23,9 +23,9 @@ def get_user_configuration():
     
     # Device IP
     while True:
-        ip = input("Enter Device IP Address (default: 192.168.4.208): ").strip()
+        ip = input("Enter Device IP Address (default: 192.168.5.3): ").strip()
         if not ip:
-            ip = "192.168.4.208"
+            ip = "192.168.5.3"
             break
         if len(ip.split('.')) == 4:
             break
@@ -33,9 +33,9 @@ def get_user_configuration():
     
     # Serial Port
     while True:
-        port = input("Enter Serial Port (default: COM4): ").strip()
+        port = input("Enter Serial Port (default: COM10): ").strip()
         if not port:
-            port = "COM4"
+            port = "COM10"
             break
         if port.upper().startswith("COM"):
             break
@@ -45,10 +45,10 @@ def get_user_configuration():
     SoC = input("Enter SoC Model (default: O22N3): ").strip() or "O22N3"
     
     # Software Version
-    SWV = input("Enter Software Version (default: 33_30_97): ").strip() or "33_30_97"
+    SWV = input("Enter Software Version (default: 33.31.22): ").strip() or "33_30_97"
     
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4_0_7-2): ").strip() or "4_0_7-2"
+    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4_0_7-2"
     
     # Number of runs
     while True:
@@ -264,6 +264,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
     #    cap.grab()
     
     # Send OK command to trigger action
+    winsound.Beep(800, 200)
     send_key(ser, 'ChUp', 0)
     ser.flush()
     start_time = time.perf_counter()
@@ -301,6 +302,8 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
             cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
             print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
+            winsound.Beep(1500, 250)
+            winsound.Beep(2500, 350)
             break
         
         # Timeout check

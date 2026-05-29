@@ -39,13 +39,13 @@ def get_user_configuration():
         print("❌ Invalid port format. Use format like COM4.")
 
     # SoC
-    SoC = input("Enter SoC Model (default: O22): ").strip() or "O22"
+    SoC = input("Enter SoC Model (default: O22N3): ").strip() or "O22"
 
     # Software Version
     SWV = input("Enter Software Version (default: 33.31.24): ").strip() or "33.31.24"
 
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4.0.7-5): ").strip() or "4.0.7-5"
+    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4.0.18-1"
 
     # Number of runs
     while True:
@@ -60,7 +60,7 @@ def get_user_configuration():
     # Timeout
     while True:
         try:
-            timeout = float(input("Enter timeout for motion detection in seconds (default: 21): ").strip() or "10")
+            timeout = float(input("Enter timeout for motion detection in seconds (default: 10): ").strip() or "10")
             if timeout > 0:
                 break
             print("❌ Please enter a positive number.")
@@ -204,6 +204,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
     frame_count = 0
     elapsed_ms = 0.0
 
+    winsound.Beep(800, 200)
     send_key(ser, trigger_key, 0)
     ser.flush()
     start_time = time.perf_counter()
@@ -240,6 +241,8 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
             cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
             print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
+            winsound.Beep(1500, 250)
+            winsound.Beep(2500, 350)
             break
 
         if (time.perf_counter() - start_time) > timeout:

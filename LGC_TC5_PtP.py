@@ -33,7 +33,7 @@ def get_user_configuration():
     
     # Serial Port
     while True:
-        port = input("Enter Serial Port (default: COMX): ").strip()
+        port = input("Enter Serial Port (default: COM10): ").strip()
         if not port:
             port = "COM10"
             break
@@ -49,6 +49,15 @@ def get_user_configuration():
     
     # LG CV
     LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4.0.18-1"
+
+    # Previous Pluto channel number
+    while True:
+        pluto_channel = input("Enter Previous Pluto Channel Number (default: 220): ").strip() or "220"
+        if any(char.isdigit() for char in pluto_channel) and all(
+            char.isdigit() or char == '-' for char in pluto_channel
+        ):
+            break
+        print("Invalid channel format. Use digits and '-' only.")
     
     # Number of runs
     while True:
@@ -63,7 +72,7 @@ def get_user_configuration():
     # Timeout
     while True:
         try:
-            timeout = float(input("Enter timeout for motion detection in seconds (default: 20): ").strip() or "20")
+            timeout = float(input("Enter timeout for motion detection in seconds (default: 10): ").strip() or "10")
             if timeout > 0:
                 break
             print("❌ Please enter a positive number.")
@@ -76,6 +85,7 @@ def get_user_configuration():
         'SoC': SoC,
         'SWV': SWV,
         'LGCV': LGCV,
+        'pluto_channel': pluto_channel,
         'num_runs': num_runs,
         'timeout': timeout
     }
@@ -146,6 +156,22 @@ IR_KEYS = {
     'BLU': b'mc 00 61\n',
 }
 
+USE_OK_TO_SELECT_CHANNEL = True
+
+CHANNEL_KEY_MAP = {
+    '0': 'Num_00',
+    '1': 'Num_01',
+    '2': 'Num_02',
+    '3': 'Num_03',
+    '4': 'Num_04',
+    '5': 'Num_05',
+    '6': 'Num_06',
+    '7': 'Num_07',
+    '8': 'Num_08',
+    '9': 'Num_09',
+    '-': 'DASH',
+}
+
 # ===== Measurement Thresholds =====
 GRAY_THRESHOLD = 150
 MOTION_THRESHOLD = 150
@@ -160,6 +186,37 @@ def send_key(ser, key_name, delay=2):
         time.sleep(delay)
     else:
         print(f"⚠ Unknown key: {key_name}")
+
+
+def channel_to_keys(channel):
+    """
+    Convert a channel string like '450' or '11-1' to IR key names.
+    """
+    keys = []
+    for char in str(channel):
+        if char not in CHANNEL_KEY_MAP:
+            raise ValueError(f"Unsupported channel character: {char}")
+        keys.append(CHANNEL_KEY_MAP[char])
+    return keys
+
+
+def prepare_channel_input(ser, channel, confirm_with_ok=True):
+    """
+    Enter the channel like a user would. If confirm_with_ok is True, OK is the
+    measurement trigger. Otherwise the final channel digit is the trigger.
+    """
+    keys = channel_to_keys(channel)
+    if confirm_with_ok:
+        for key_name in keys:
+            send_key(ser, key_name, 2)
+        return keys, 'OK'
+
+    if len(keys) <= 1:
+        return [], keys[0]
+
+    for key_name in keys[:-1]:
+        send_key(ser, key_name, 2)
+    return keys[:-1], keys[-1]
 
 
 def send_shell_command_with_debug(ser, command):
@@ -240,7 +297,7 @@ def initialize_camera(camera_index=1):
         sys.exit(1)
 
 
-def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
+def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp'): 
     """
     Perform motion detection measurement
     """
@@ -263,12 +320,13 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
     #for _ in range(3):
     #    cap.grab()
     
-    # Send OK command to trigger action
+    # Send the final key to trigger action
     winsound.Beep(800, 200)
-    send_key(ser, 'OK', 0)
+    send_key(ser, trigger_key, 0)
     ser.flush()
     start_time = time.perf_counter()
-    
+
+    print(f"[RUN {run_idx}] Trigger key: {trigger_key}")
     print(f"[RUN {run_idx}] Monitoring for motion...")
     
     while True:
@@ -343,6 +401,7 @@ def main():
     SoC = config['SoC']
     SWV = config['SWV']
     LGCV = config['LGCV']
+    pluto_channel = config['pluto_channel']
     num_runs = config['num_runs']
     timeout = config['timeout']
     
@@ -355,12 +414,43 @@ def main():
     # CSV path
     csv_path = "tv_response.csv"
     results = []
-    
     print(f"\n{'='*60}")
     print(f"  Starting {num_runs} Test Runs")
     print(f"{'='*60}\n")
     
     # Main test loop
+    # Pre-conditions
+    print("\n[PRE-CONDITION] Setting up test environment...")
+    send_key(ser, 'Exit', 2)
+    send_key(ser, 'LiveTV', 3)
+    send_key(ser, 'Num_03', 1)
+    send_key(ser, 'Num_06', 1)
+    send_key(ser, 'DASH', 1)
+    send_key(ser, 'Num_01', 1)
+    send_key(ser, 'OK', 5)
+    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
+
+    """
+    # AC Power cycle
+    print("\n[AC POWER CYCLE] Starting power cycle...")
+    asyncio.run(run_ac_power_cycle(ip, 60))
+    wait_with_countdown_noKeyInput(18, "Power Stabilization")
+    """
+
+    # Launching PIP
+    send_key(ser, 'Exit', 2)
+    send_key(ser, 'Home', 2)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'OK', 10)
+
+    for key_name in channel_to_keys(pluto_channel):
+        send_key(ser, key_name, 2)
+    send_key(ser, 'OK', 5)
+
+    send_key(ser, 'Back', 5)
+    
+
+
     for run_idx in range(1, num_runs + 1):
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
@@ -370,54 +460,23 @@ def main():
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_path = os.path.join(
             "C:/Temp",
-            f"LGC_Perf_TC01_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
+            f"LGC_Perf_TC05_PtP_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")
         
         try:
-            # Pre-conditions
-            print("\n[PRE-CONDITION] Setting up test environment...")
-            send_key(ser, 'LiveTV', 3)
-            send_key(ser, 'Num_03', 1)
-            send_key(ser, 'Num_06', 1)
-            send_key(ser, 'DASH', 1)
-            send_key(ser, 'Num_01', 1)
-            send_key(ser, 'OK', 2)
-            wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+            send_key(ser, 'ChDown', 10)
 
 
-            # Home for 1 min
-            send_key(ser, 'Home', 0)
-            wait_with_countdown_noKeyInput(60, "Power Stabilization")
-
-
-            # Pre-conditions
-            print("\n[PRE-CONDITION] Setting up test environment...")
-            send_key(ser, 'LiveTV', 3)
-            send_key(ser, 'Num_03', 1)
-            send_key(ser, 'Num_06', 1)
-            send_key(ser, 'DASH', 1)
-            send_key(ser, 'Num_01', 1)
-            send_key(ser, 'OK', 2)
-            wait_with_countdown_noKeyInput(30, "Pre-load Channel")
-
-
-
-            # AC Power cycle
-            print("\n[AC POWER CYCLE] Starting power cycle...")
-            asyncio.run(run_ac_power_cycle(ip, 60))
-            wait_with_countdown_noKeyInput(60, "Power Stabilization")
-            
-
-            # Navigate to LGC
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'DpadRt', 2)
-            
             # Motion detection measurement
-            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
+            result = perform_motion_detection(
+                ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp'
+            )
             
             if result:
+                result['source_channel'] = 'Native'
+                result['target_channel'] = pluto_channel
                 results.append(result)
                 
                 # Save to CSV
@@ -425,6 +484,8 @@ def main():
                     df = pd.DataFrame({
                         'Run': [result['run']],
                         'Timestamp': [ts_run],
+                        'Source_Channel': [result['source_channel']],
+                        'Target_Channel': [result['target_channel']],
                         'Response_Time_ms': [round(result['response_time_ms'], 2)],
                         'Frames': [result['frame_count']],
                         'Status': ['PASS'],
@@ -438,8 +499,21 @@ def main():
         
         # Wait before next run
         if run_idx < num_runs:
+            
             wait_with_countdown_noKeyInput(10, "Interval between runs")
+            """
+            send_key(ser, 'Home', 2)
+            send_key(ser, 'Back', 2)
+            send_key(ser, 'DpadUp', 2)
+            send_key(ser, 'DpadUp', 2)
+            send_key(ser, 'OK', 2)
+            """
+            
     
+
+
+
+
     # Summary
     print(f"\n{'='*60}")
     print(f"  Test Complete - Summary")
