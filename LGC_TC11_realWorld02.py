@@ -214,14 +214,51 @@ def wait_with_countdown_noKeyInput(seconds, description="Timer"):
     """
     winsound.Beep(1000, 200)
     print(f"\n[TIMER] {description}: {seconds} seconds")
-    
+
     for remaining in range(seconds, 0, -1):
         print(f"  ⏱ {remaining} seconds remaining...", end="\r")
         time.sleep(1)
-    
+
     print(" " * 50, end="\r")
     winsound.Beep(1500, 300)
     print(f"[TIMER] ✓ {description} Complete!\n")
+
+
+def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stable_frames=8):
+    """Wait until the screen stops changing — app launch complete."""
+    print(f"  [Waiting for screen stable, timeout={timeout}s...]")
+    prev_gray = None
+    stable_count = 0
+    start = time.perf_counter()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        curr_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+
+        if prev_gray is not None:
+            diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
+            elapsed = time.perf_counter() - start
+            print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | Stable: {stable_count}/{required_stable_frames}", end="\r")
+
+            if diff_score < stable_threshold:
+                stable_count += 1
+                if stable_count >= required_stable_frames:
+                    print(f"\n  ✓ Screen stable after {elapsed:.1f}s")
+                    return True
+            else:
+                stable_count = 0
+
+        prev_gray = curr_blur
+
+        if (time.perf_counter() - start) > timeout:
+            print(f"\n  ⚠ Stable wait timeout after {timeout}s")
+            return False
+
+    return False
 
 
 async def run_ac_power_cycle(ip, off_seconds):
@@ -417,9 +454,9 @@ def main():
             send_key(ser, 'DpadRt', 1)
             send_key(ser, 'DpadRt', 1)
             send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'OK', 7)
-            send_key(ser, 'OK', 5)
-            send_key(ser, 'OK', 5)
+            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
+            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
             wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
             # Step 6: YouTube (2nd app), play 3 min
@@ -427,9 +464,9 @@ def main():
             send_key(ser, 'Home', 2)
             send_key(ser, 'DpadRt', 1)
             send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'OK', 7)
-            send_key(ser, 'OK', 4)
-            send_key(ser, 'OK', 3)
+            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
+            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
             wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
             # Step 7: Home, wait 30s
