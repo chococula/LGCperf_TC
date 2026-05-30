@@ -457,19 +457,26 @@ def main():
         try:
 
             # Step 1 : DC Power cycle
-            send_key(ser, 'P_OFF', 12)
+            send_key(ser, 'P_OFF', 0)
             wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
 
+            if SoC == 'K25Lp':
+                for _ in range(3):
+                    winsound.Beep(1500, 400)
+                    time.sleep(0.2)
+                print("\n" + "="*60)
+                print("  ⚠  [K25Lp] Power On 명령이 지원되지 않습니다.")
+                print("     TV 전원을 수동으로 켜 주세요.")
+                print("="*60)
+                input("  ✅ 전원 켜신 후 Enter 키를 누르세요: ")
+            else:
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                time.sleep(3)
+                send_key(ser, 'P_ON', 3)
+                send_key(ser, 'P_ON', 0)
 
-
-            #ser.reset_input_buffer()   # 시리얼 수신 버퍼 비우기 - P_OFF 응답 잔여 데이터 제거
-            #ser.reset_output_buffer()  # 시리얼 송신 버퍼 비우기 - 미전송 데이터 제거
-
-
-            time.sleep(3)
-            send_key(ser, 'P_ON', 3)
-            send_key(ser, 'P_ON', 3)
-            wait_with_countdown_noKeyInput(60, "Boot Stabilization")
+            wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
             # Step 2: LiveTV Fox 36-1, wait 1 min
             print("\n[STEP 1] Live TV Fox 36-1...")

@@ -829,8 +829,24 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
 
     send_key(ser, 'P_OFF', 0)
     wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
-    send_key(ser, 'P_ON', 0)
-    wait_with_countdown_noKeyInput(60, "Settling Down for 1m")
+
+    if config.get('SoC') == 'K25Lp':
+        for _ in range(3):
+            winsound.Beep(1500, 400)
+            time.sleep(0.2)
+        print("\n" + "="*60)
+        print("  ⚠  [K25Lp] Power On 명령이 지원되지 않습니다.")
+        print("     TV 전원을 수동으로 켜 주세요.")
+        print("="*60)
+        input("  ✅ 전원 켜신 후 Enter 키를 누르세요: ")
+    else:
+        ser.reset_input_buffer()
+        ser.reset_output_buffer()
+        time.sleep(3)
+        send_key(ser, 'P_ON', 3)
+        send_key(ser, 'P_ON', 0)
+
+    wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
     print("\n[STEP 1] Live TV Fox 36-1...")
     send_key(ser, 'Exit', 2)
@@ -847,8 +863,8 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
@@ -856,8 +872,8 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'Home', 2)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
@@ -890,8 +906,24 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
 
     send_key(ser, 'P_OFF', 0)
     wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
-    send_key(ser, 'P_ON', 0)
-    wait_with_countdown_noKeyInput(60, "Settling Down for 1m")
+
+    if config.get('SoC') == 'K25Lp':
+        for _ in range(3):
+            winsound.Beep(1500, 400)
+            time.sleep(0.2)
+        print("\n" + "="*60)
+        print("  ⚠  [K25Lp] Power On 명령이 지원되지 않습니다.")
+        print("     TV 전원을 수동으로 켜 주세요.")
+        print("="*60)
+        input("  ✅ 전원 켜신 후 Enter 키를 누르세요: ")
+    else:
+        ser.reset_input_buffer()
+        ser.reset_output_buffer()
+        time.sleep(3)
+        send_key(ser, 'P_ON', 3)
+        send_key(ser, 'P_ON', 0)
+
+    wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
     print("\n[STEP 1] Live TV Fox 36-1...")
     send_key(ser, 'Exit', 2)
