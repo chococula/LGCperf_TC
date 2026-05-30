@@ -220,17 +220,11 @@ def initialize_serial(port):
         sys.exit(1)
 
 
-def initialize_camera():
-    for idx in range(1, 6):
-        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-        if cap.isOpened():
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            print(f"✓ USB Camera initialized (index: {idx})")
-            return cap
-        cap.release()
-    print("❌ No USB camera found (tried indices 1-5)")
-    sys.exit(1)
-
+def initialize_camera(camera_index=1):
+    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    print(f"✓ Camera initialized (index: {camera_index})")
+    return cap
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK'):
     print(f"\n[RUN {run_idx}] Motion detection starting...")
