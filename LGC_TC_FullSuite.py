@@ -830,13 +830,7 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'P_OFF', 0)
     wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
 
-    for _ in range(3):
-        winsound.Beep(1500, 400)
-        time.sleep(0.2)
-    print("\n" + "="*60)
-    print("  ⚠  Power On이 필요합니다. TV 전원을 켜 주세요.")
-    print("="*60)
-    input("  ✅ 전원 켜신 후 Enter 키를 누르세요: ")
+    send_key(ser, 'P_ON', 0)
 
     wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
@@ -899,13 +893,7 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'P_OFF', 0)
     wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
 
-    for _ in range(3):
-        winsound.Beep(1500, 400)
-        time.sleep(0.2)
-    print("\n" + "="*60)
-    print("  ⚠  Power On이 필요합니다. TV 전원을 켜 주세요.")
-    print("="*60)
-    input("  ✅ 전원 켜신 후 Enter 키를 누르세요: ")
+    send_key(ser, 'P_ON', 0)
 
     wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
