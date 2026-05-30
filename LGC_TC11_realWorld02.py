@@ -261,6 +261,32 @@ def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stabl
     return False
 
 
+def wait_for_app_ready(cap, motion_timeout=15, stable_timeout=60):
+    """Phase 1: wait for screen to start moving (app loading).
+       Phase 2: wait for screen to stabilize (app ready for input)."""
+    print(f"  [Waiting for app activity (motion_timeout={motion_timeout}s)...]")
+    prev_gray = None
+    start = time.perf_counter()
+
+    while (time.perf_counter() - start) < motion_timeout:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        curr_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+        if prev_gray is not None:
+            diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
+            elapsed = time.perf_counter() - start
+            print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} (waiting for motion>5)", end="\r")
+            if diff_score > 5:
+                print(f"\n  ✓ Screen active at {elapsed:.1f}s — now waiting for stable...")
+                return wait_for_screen_stable(cap, timeout=stable_timeout)
+        prev_gray = curr_blur
+
+    print(f"\n  ⚠ No motion in {motion_timeout}s — waiting for stable anyway...")
+    return wait_for_screen_stable(cap, timeout=stable_timeout)
+
+
 async def run_ac_power_cycle(ip, off_seconds):
     """
     AC Power cycle via SmartPlug
@@ -431,11 +457,19 @@ def main():
         try:
 
             # Step 1 : DC Power cycle
-            send_key(ser, 'P_OFF', 0)
+            send_key(ser, 'P_OFF', 12)
             wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
 
-            send_key(ser, 'P_ON', 0)
-            wait_with_countdown_noKeyInput(60, "Settling Down for 1m")
+
+
+            #ser.reset_input_buffer()   # 시리얼 수신 버퍼 비우기 - P_OFF 응답 잔여 데이터 제거
+            #ser.reset_output_buffer()  # 시리얼 송신 버퍼 비우기 - 미전송 데이터 제거
+
+
+            time.sleep(3)
+            send_key(ser, 'P_ON', 3)
+            send_key(ser, 'P_ON', 3)
+            wait_with_countdown_noKeyInput(60, "Boot Stabilization")
 
             # Step 2: LiveTV Fox 36-1, wait 1 min
             print("\n[STEP 1] Live TV Fox 36-1...")
@@ -454,8 +488,8 @@ def main():
             send_key(ser, 'DpadRt', 1)
             send_key(ser, 'DpadRt', 1)
             send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
-            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
             send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
             wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
@@ -464,8 +498,8 @@ def main():
             send_key(ser, 'Home', 2)
             send_key(ser, 'DpadRt', 1)
             send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
-            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
             send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
             wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
