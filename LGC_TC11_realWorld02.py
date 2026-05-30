@@ -305,18 +305,16 @@ async def run_ac_power_cycle(ip, off_seconds):
         print(f"❌ Power cycle failed: {e}")
 
 
-def initialize_camera(camera_index=1):
-    """
-    Initialize camera with error handling
-    """
-    try:
-        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        print(f"✓ Camera initialized (index: {camera_index})")
-        return cap
-    except Exception as e:
-        print(f"❌ Camera initialization failed: {e}")
-        sys.exit(1)
+def initialize_camera():
+    for idx in range(1, 6):
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            print(f"✓ USB Camera initialized (index: {idx})")
+            return cap
+        cap.release()
+    print("No USB camera found (tried indices 1-5)")
+    sys.exit(1)
 
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config):
@@ -429,7 +427,7 @@ def main():
     ser = initialize_serial(port)
     
     # Initialize camera
-    cap = initialize_camera(1)
+    cap = initialize_camera()
     
     # CSV path
     csv_path = "tv_response.csv"
@@ -477,10 +475,10 @@ def main():
 
             # Step 3: Netflix (3rd app: LGC > YT > Netflix), play 1 min
             print("\n[STEP 5] Launching Netflix...")
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'DpadRt', 1)
+            send_key(ser, 'Home', 3)
+            send_key(ser, 'DpadRt', 2)
+            send_key(ser, 'DpadRt', 2)
+            send_key(ser, 'DpadRt', 2)
             send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
             send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
@@ -488,9 +486,9 @@ def main():
 
             # Step 6: YouTube (2nd app), play 3 min
             print("\n[STEP 6] Launching YouTube...")
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'DpadRt', 1)
-            send_key(ser, 'DpadRt', 1)
+            send_key(ser, 'Home', 3)
+            send_key(ser, 'DpadRt', 2)
+            send_key(ser, 'DpadRt', 2)
             send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
             send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)

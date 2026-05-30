@@ -178,15 +178,16 @@ async def run_ac_power_cycle(ip, off_seconds):
         print(f"❌ Power cycle failed: {e}")
 
 
-def initialize_camera(camera_index=1):
-    try:
-        cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        print(f"✓ Camera initialized (index: {camera_index})")
-        return cap
-    except Exception as e:
-        print(f"❌ Camera initialization failed: {e}")
-        sys.exit(1)
+def initialize_camera():
+    for idx in range(1, 6):
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            print(f"✓ USB Camera initialized (index: {idx})")
+            return cap
+        cap.release()
+    print("❌ No USB camera found (tried indices 1-5)")
+    sys.exit(1)
 
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK'):
@@ -280,7 +281,7 @@ def main():
     timeout  = config['timeout']
 
     ser = initialize_serial(port)
-    cap = initialize_camera(1)
+    cap = initialize_camera()
 
     csv_path = "tv_response.csv"
     results = []
