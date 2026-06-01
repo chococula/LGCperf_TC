@@ -167,7 +167,7 @@ def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stabl
     return False
 
 
-def wait_for_app_ready(cap, motion_timeout=15, stable_timeout=60):
+def wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30):
     """Phase 1: wait for screen to start moving (app loading).
        Phase 2: wait for screen to stabilize (app ready for input)."""
     print(f"  [Waiting for app activity (motion_timeout={motion_timeout}s)...]")
@@ -186,11 +186,15 @@ def wait_for_app_ready(cap, motion_timeout=15, stable_timeout=60):
             print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} (waiting for motion>5)", end="\r")
             if diff_score > 5:
                 print(f"\n  ✓ Screen active at {elapsed:.1f}s — now waiting for stable...")
-                return wait_for_screen_stable(cap, timeout=stable_timeout)
+                result = wait_for_screen_stable(cap, timeout=stable_timeout)
+                time.sleep(1)
+                return result
         prev_gray = curr_blur
 
     print(f"\n  ⚠ No motion in {motion_timeout}s — waiting for stable anyway...")
-    return wait_for_screen_stable(cap, timeout=stable_timeout)
+    result = wait_for_screen_stable(cap, timeout=stable_timeout)
+    time.sleep(1)
+    return result
 
 
 async def _ac_power_cycle(ip, off_seconds):
@@ -220,7 +224,7 @@ def initialize_serial(port):
         sys.exit(1)
 
 
-def initialize_camera(camera_index=1):
+def initialize_camera(camera_index=0):
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     print(f"✓ Camera initialized (index: {camera_index})")
@@ -840,19 +844,19 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
     print("\n[STEP 5] Launching Netflix...")
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
+    send_key(ser, 'Home', 3)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
     send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
+    send_key(ser, 'Home', 3)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
     send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
@@ -903,19 +907,19 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
     print("\n[STEP 5] Launching Netflix...")
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
+    send_key(ser, 'Home', 3)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
+    send_key(ser, 'Home', 3)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
     send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
