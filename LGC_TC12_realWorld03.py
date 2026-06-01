@@ -224,11 +224,12 @@ def wait_with_countdown_noKeyInput(seconds, description="Timer"):
     print(f"[TIMER] ✓ {description} Complete!\n")
 
 
-def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stable_frames=8):
-    """Wait until the screen stops changing — app launch complete."""
-    print(f"  [Waiting for screen stable, timeout={timeout}s...]")
+def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, min_stable_duration=4.0):
+    """Wait until the screen is continuously stable for min_stable_duration seconds.
+    Time-based to avoid false positives from brief stable moments (e.g. YouTube loading UI)."""
+    print(f"  [Waiting for screen stable, timeout={timeout}s, need {min_stable_duration}s stable...]")
     prev_gray = None
-    stable_count = 0
+    stable_start = None
     start = time.perf_counter()
 
     while True:
@@ -242,15 +243,18 @@ def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stabl
         if prev_gray is not None:
             diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
             elapsed = time.perf_counter() - start
-            print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | Stable: {stable_count}/{required_stable_frames}", end="\r")
 
             if diff_score < stable_threshold:
-                stable_count += 1
-                if stable_count >= required_stable_frames:
+                if stable_start is None:
+                    stable_start = time.perf_counter()
+                stable_dur = time.perf_counter() - stable_start
+                print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | Stable: {stable_dur:.1f}/{min_stable_duration}s", end="\r")
+                if stable_dur >= min_stable_duration:
                     print(f"\n  ✓ Screen stable after {elapsed:.1f}s")
                     return True
             else:
-                stable_count = 0
+                stable_start = None
+                print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | (motion)", end="\r")
 
         prev_gray = curr_blur
 

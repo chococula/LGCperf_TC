@@ -130,11 +130,12 @@ def wait_with_countdown_noKeyInput(seconds, description="Timer"):
     print(f"[TIMER] ✓ {description} Complete!\n")
 
 
-def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stable_frames=8):
-    """Wait until the screen stops changing — app launch complete."""
-    print(f"  [Waiting for screen stable, timeout={timeout}s...]")
+def wait_for_screen_stable(cap, timeout=60, stable_threshold=5.0, min_stable_duration=4.0):
+    """Wait until the screen is continuously stable for min_stable_duration seconds.
+    Time-based to avoid false positives from brief stable moments (e.g. YouTube loading UI)."""
+    print(f"  [Waiting for screen stable, timeout={timeout}s, need {min_stable_duration}s stable...]")
     prev_gray = None
-    stable_count = 0
+    stable_start = None
     start = time.perf_counter()
 
     while True:
@@ -148,15 +149,18 @@ def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, required_stabl
         if prev_gray is not None:
             diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
             elapsed = time.perf_counter() - start
-            print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | Stable: {stable_count}/{required_stable_frames}", end="\r")
 
             if diff_score < stable_threshold:
-                stable_count += 1
-                if stable_count >= required_stable_frames:
+                if stable_start is None:
+                    stable_start = time.perf_counter()
+                stable_dur = time.perf_counter() - stable_start
+                print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | Stable: {stable_dur:.1f}/{min_stable_duration}s", end="\r")
+                if stable_dur >= min_stable_duration:
                     print(f"\n  ✓ Screen stable after {elapsed:.1f}s")
                     return True
             else:
-                stable_count = 0
+                stable_start = None
+                print(f"  ⏱ {elapsed:.1f}s | Diff: {diff_score:.2f} | (motion)", end="\r")
 
         prev_gray = curr_blur
 
@@ -224,7 +228,7 @@ def initialize_serial(port):
         sys.exit(1)
 
 
-def initialize_camera(camera_index=0):
+def initialize_camera(camera_index=1):
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     print(f"✓ Camera initialized (index: {camera_index})")
@@ -871,7 +875,7 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'OK', 1)
 
     print("\n[STEP 9] Entering LG Channels - measuring load time...")
-    send_key(ser, 'Home', 2)
+    send_key(ser, 'Home', 3)
     send_key(ser, 'DpadRt', 2)
 
     result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
@@ -927,7 +931,7 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
 
     print("\n[STEP 7] Returning to Home...")
     send_key(ser, 'Home', 2)
-    wait_with_countdown_noKeyInput(30, "Home Screen")
+    wait_with_countdown_noKeyInput(60, "Home Screen")
 
     print("\n[STEP 8] PIP → Full Screen...")
     send_key(ser, 'DpadDn', 2)
