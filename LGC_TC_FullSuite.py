@@ -714,7 +714,7 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadLt', 2)
     send_key(ser, 'DpadLt', 2)
     send_key(ser, 'DpadLt', 2)
-    send_key(ser, 'DpadDn', 1)
+    send_key(ser, 'DpadUp', 1)
 
     # TC06 – OK to select Movies and TV
     r1 = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
@@ -1105,6 +1105,48 @@ def main():
 
     ser = initialize_serial(port)
     cap = initialize_camera()
+
+    # ===== Camera Test =====
+    print(f"\n{'='*60}")
+    print("  Camera Test — Check framing before starting TCs")
+    print(f"{'='*60}")
+    print("  Live preview is ON. Press 'q' to quit, Enter to confirm OK.\n")
+
+    prev_gray = None
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("❌ Camera frame read failed.")
+            break
+
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        curr_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+
+        display = frame.copy()
+        if prev_gray is not None:
+            diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
+            mean_val   = np.mean(curr_gray)
+            h = display.shape[0]
+            cv2.putText(display, f"Diff: {diff_score:.2f}  Mean: {mean_val:.1f}",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(display, "Press 'q' to quit | Enter to start",
+                        (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
+        prev_gray = curr_blur
+
+        cv2.imshow("Camera Test — Confirm framing then press Enter", display)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            print("Camera test cancelled. Exiting.")
+            cap.release()
+            cv2.destroyAllWindows()
+            ser.close()
+            sys.exit(0)
+        if key == 13:  # Enter
+            break
+
+    cv2.destroyAllWindows()
+    print("✓ Camera confirmed. Starting TCs.\n")
+    # ===== End Camera Test =====
 
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"
