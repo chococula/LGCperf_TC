@@ -17,6 +17,8 @@ Automated performance measurement tool for LG TV (webOS) using camera-based moti
 
 ### Hardware Setup
 
+![Test Setup](setup.jpg)
+
 ```
 [TV] ──RS-232──► [USB-Serial Adapter] ──► [Laptop]
 [TV screen] ◄──── [USB Camera on tripod] ──► [Laptop]
