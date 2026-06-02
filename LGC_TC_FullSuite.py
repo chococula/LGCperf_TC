@@ -1093,25 +1093,13 @@ TC_BETWEEN_RUNS_MAP = {
 
 
 def main():
-    selected_tcs = select_tcs()
-    if not selected_tcs:
-        print("No TCs selected. Exiting.")
-        sys.exit(0)
-
-    config = get_user_configuration(selected_tcs)
-
-    num_runs = config['num_runs']
-    port     = config['port']
-
-    ser = initialize_serial(port)
-    cap = initialize_camera()
-
     # ===== Camera Test =====
     print(f"\n{'='*60}")
-    print("  Camera Test — Check framing before starting TCs")
+    print("  Camera Test — Check framing before entering parameters")
     print(f"{'='*60}")
     print("  Live preview is ON. Press 'q' to quit, Enter to confirm OK.\n")
 
+    cap = initialize_camera()
     prev_gray = None
     while True:
         ret, frame = cap.read()
@@ -1129,7 +1117,7 @@ def main():
             h = display.shape[0]
             cv2.putText(display, f"Diff: {diff_score:.2f}  Mean: {mean_val:.1f}",
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(display, "Press 'q' to quit | Enter to start",
+            cv2.putText(display, "Press 'q' to quit | Enter to confirm",
                         (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
         prev_gray = curr_blur
 
@@ -1139,14 +1127,25 @@ def main():
             print("Camera test cancelled. Exiting.")
             cap.release()
             cv2.destroyAllWindows()
-            ser.close()
             sys.exit(0)
         if key == 13:  # Enter
             break
 
     cv2.destroyAllWindows()
-    print("✓ Camera confirmed. Starting TCs.\n")
+    print("✓ Camera confirmed.\n")
     # ===== End Camera Test =====
+
+    selected_tcs = select_tcs()
+    if not selected_tcs:
+        print("No TCs selected. Exiting.")
+        sys.exit(0)
+
+    config = get_user_configuration(selected_tcs)
+
+    num_runs = config['num_runs']
+    port     = config['port']
+
+    ser = initialize_serial(port)
 
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"
