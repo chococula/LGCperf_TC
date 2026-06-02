@@ -1094,13 +1094,21 @@ TC_BETWEEN_RUNS_MAP = {
 
 def main():
     # ===== Camera Test =====
-    print(f"\n{'='*60}")
-    print("  Camera Test — Check framing before entering parameters")
-    print(f"{'='*60}")
-    print("  Live preview is ON. Press 'q' to quit, Enter to confirm OK.\n")
+    print("\n" + "="*60)
+    print("  [CAMERA TEST]")
+    print("="*60)
+    print("  카메라 미리보기 창이 열립니다.")
+    print("  TV 화면이 잘 보이도록 카메라 위치를 조정하세요.")
+    print("")
+    print("  미리보기 창에서:")
+    print("    SPACE  →  위치 확인 완료, 파라미터 입력으로 진행")
+    print("    Q      →  종료")
+    print("="*60 + "\n")
 
     cap = initialize_camera()
     prev_gray = None
+    frame_count = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -1109,30 +1117,39 @@ def main():
 
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         curr_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+        frame_count += 1
 
         display = frame.copy()
+        diff_score = 0.0
+        mean_val   = np.mean(curr_gray)
+
         if prev_gray is not None:
             diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
-            mean_val   = np.mean(curr_gray)
-            h = display.shape[0]
-            cv2.putText(display, f"Diff: {diff_score:.2f}  Mean: {mean_val:.1f}",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(display, "Press 'q' to quit | Enter to confirm",
-                        (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
-        prev_gray = curr_blur
 
-        cv2.imshow("Camera Test — Confirm framing then press Enter", display)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            print("Camera test cancelled. Exiting.")
+        h = display.shape[0]
+        cv2.putText(display, f"Diff: {diff_score:.2f}  Mean: {mean_val:.1f}",
+                    (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+        cv2.putText(display, "SPACE: Confirm  |  Q: Quit",
+                    (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        cv2.imshow("[CAMERA TEST] Adjust framing, then press SPACE", display)
+
+        if frame_count % 30 == 0:
+            print(f"  ⏱ Camera live | Diff: {diff_score:.2f}  Mean: {mean_val:.1f}  (SPACE to confirm)", end="\r")
+
+        key = cv2.waitKey(30) & 0xFF
+        if key == ord('q') or key == ord('Q'):
+            print("\nCamera test cancelled. Exiting.")
             cap.release()
             cv2.destroyAllWindows()
             sys.exit(0)
-        if key == 13:  # Enter
+        if key == ord(' '):
             break
 
+        prev_gray = curr_blur
+
     cv2.destroyAllWindows()
-    print("✓ Camera confirmed.\n")
+    print("\n✓ Camera position confirmed. Proceeding to configuration.\n")
     # ===== End Camera Test =====
 
     selected_tcs = select_tcs()
