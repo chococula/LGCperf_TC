@@ -337,7 +337,7 @@ def main():
     SWV = config['SWV']
     LGCV = config['LGCV']
     num_runs = config['num_runs']
-    timeout = config['timeout']
+    timeout = 15
     
     # Initialize serial
     ser = initialize_serial(port)

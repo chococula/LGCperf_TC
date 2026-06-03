@@ -228,7 +228,7 @@ def initialize_serial(port):
         sys.exit(1)
 
 
-def initialize_camera(camera_index=1):
+def initialize_camera(camera_index=0):
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     print(f"✓ Camera initialized (index: {camera_index})")
@@ -391,7 +391,7 @@ def run_tc01(ser, cap, config, run_idx, csv_path):
 
 def run_tc02(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
-    timeout = config['timeout']
+    timeout = 15
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC02", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
@@ -1093,63 +1093,64 @@ TC_BETWEEN_RUNS_MAP = {
 
 
 def main():
-    # ===== Camera Test =====
-    print("\n" + "="*60)
-    print("  [CAMERA TEST]")
-    print("="*60)
-    print("  카메라 미리보기 창이 열립니다.")
-    print("  TV 화면이 잘 보이도록 카메라 위치를 조정하세요.")
-    print("")
-    print("  미리보기 창에서:")
-    print("    SPACE  →  위치 확인 완료, 파라미터 입력으로 진행")
-    print("    Q      →  종료")
-    print("="*60 + "\n")
+    # ===== Camera Test (optional) =====
+    do_cam_test = input("Run camera test? (y/N): ").strip().lower()
+    if do_cam_test == 'y':
+        print("\n" + "="*60)
+        print("  [CAMERA TEST]")
+        print("="*60)
+        print("  Adjust camera so the TV screen is fully visible.")
+        print("    SPACE  ->  Confirm and proceed")
+        print("    Q      ->  Quit")
+        print("="*60 + "\n")
 
     cap = initialize_camera()
-    prev_gray = None
-    frame_count = 0
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("❌ Camera frame read failed.")
-            break
+    if do_cam_test == 'y':
+        prev_gray = None
+        frame_count = 0
 
-        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        curr_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
-        frame_count += 1
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                print("❌ Camera frame read failed.")
+                break
 
-        display = frame.copy()
-        diff_score = 0.0
-        mean_val   = np.mean(curr_gray)
+            curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            curr_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+            frame_count += 1
 
-        if prev_gray is not None:
-            diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
+            display = frame.copy()
+            diff_score = 0.0
+            mean_val   = np.mean(curr_gray)
 
-        h = display.shape[0]
-        cv2.putText(display, f"Diff: {diff_score:.2f}  Mean: {mean_val:.1f}",
-                    (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-        cv2.putText(display, "SPACE: Confirm  |  Q: Quit",
-                    (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            if prev_gray is not None:
+                diff_score = np.mean(cv2.absdiff(prev_gray, curr_blur))
 
-        cv2.imshow("[CAMERA TEST] Adjust framing, then press SPACE", display)
+            h = display.shape[0]
+            cv2.putText(display, f"Diff: {diff_score:.2f}  Mean: {mean_val:.1f}",
+                        (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            cv2.putText(display, "SPACE: Confirm  |  Q: Quit",
+                        (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        if frame_count % 30 == 0:
-            print(f"  ⏱ Camera live | Diff: {diff_score:.2f}  Mean: {mean_val:.1f}  (SPACE to confirm)", end="\r")
+            cv2.imshow("[CAMERA TEST] Adjust framing, then press SPACE", display)
 
-        key = cv2.waitKey(30) & 0xFF
-        if key == ord('q') or key == ord('Q'):
-            print("\nCamera test cancelled. Exiting.")
-            cap.release()
-            cv2.destroyAllWindows()
-            sys.exit(0)
-        if key == ord(' '):
-            break
+            if frame_count % 30 == 0:
+                print(f"  ⏱ Camera live | Diff: {diff_score:.2f}  Mean: {mean_val:.1f}  (SPACE to confirm)", end="\r")
 
-        prev_gray = curr_blur
+            key = cv2.waitKey(30) & 0xFF
+            if key == ord('q') or key == ord('Q'):
+                print("\nCamera test cancelled. Exiting.")
+                cap.release()
+                cv2.destroyAllWindows()
+                sys.exit(0)
+            if key == ord(' '):
+                break
 
-    cv2.destroyAllWindows()
-    print("\n✓ Camera position confirmed. Proceeding to configuration.\n")
+            prev_gray = curr_blur
+
+        cv2.destroyAllWindows()
+        print("\n✓ Camera position confirmed.\n")
     # ===== End Camera Test =====
 
     selected_tcs = select_tcs()
