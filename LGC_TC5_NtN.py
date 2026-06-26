@@ -436,7 +436,7 @@ def main():
     send_key(ser, 'OK', 10)
 
     for key_name in channel_to_keys(native_previous_channel):
-        send_key(ser, key_name, 2)
+        send_key(ser, key_name, 1)
     send_key(ser, 'OK', 5)
 
     send_key(ser, 'Back', 5)

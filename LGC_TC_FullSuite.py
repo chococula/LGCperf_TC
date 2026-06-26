@@ -348,7 +348,7 @@ def make_dir(base_root, label, run_idx, ts_run, config, suffix=""):
 
 def run_tc01(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
-    timeout = 20
+    timeout = 30
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC01", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
@@ -391,7 +391,7 @@ def run_tc01(ser, cap, config, run_idx, csv_path):
 
 def run_tc02(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
-    timeout = 15
+    timeout = 20
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC02", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
@@ -545,6 +545,7 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
 # =====================================================================
 
 def setup_tc05_ntn(ser, cap, config):
+    ip = config['ip']
     native_previous = config.get('native_previous_channel', '443')
     print("\n[TC05_NtN SETUP] Setting up test environment...")
     send_key(ser, 'Exit', 2)
@@ -554,15 +555,28 @@ def setup_tc05_ntn(ser, cap, config):
     send_key(ser, 'DASH', 1)
     send_key(ser, 'Num_01', 1)
     send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
+
+    run_ac_power_cycle(ip, 60)
+    wait_with_countdown_noKeyInput(180, "Power Stabilization")
 
     send_key(ser, 'Exit', 2)
     send_key(ser, 'Home', 2)
     send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'OK', 15)
+
+
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+
+    send_key(ser, 'DpadDn', 3)
+    send_key(ser, 'DpadDn', 3)
     send_key(ser, 'OK', 10)
 
     for key_name in channel_to_keys(native_previous):
-        send_key(ser, key_name, 2)
+        send_key(ser, key_name, 1)
     send_key(ser, 'OK', 5)
     send_key(ser, 'Back', 5)
 
@@ -681,7 +695,6 @@ def run_tc05_ptp(ser, cap, config, run_idx, csv_path):
 
 def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
-    timeout = config['timeout']
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC06", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
@@ -714,10 +727,10 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadLt', 2)
     send_key(ser, 'DpadLt', 2)
     send_key(ser, 'DpadLt', 2)
-    send_key(ser, 'DpadUp', 1)
+    send_key(ser, 'DpadDn', 1)
 
     # TC06 – OK to select Movies and TV
-    r1 = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
+    r1 = perform_motion_detection(ser, cap, run_idx, dir_path, timeout=25, config=config, trigger_key='OK')
     if r1:
         r1['source_channel'] = 'LG Channels'
         r1['target_channel'] = 'Movies and TV'
@@ -727,8 +740,10 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
 
     # TC07 – scroll down
     dir_scroll = dir_path + "_Scroll"
+
+
     os.makedirs(dir_scroll, exist_ok=True)
-    r2 = perform_motion_detection(ser, cap, run_idx, dir_scroll, timeout, config, trigger_key='DpadDn')
+    r2 = perform_motion_detection(ser, cap, run_idx, dir_scroll, timeout=5, config=config, trigger_key='DpadDn')
     if r2:
         r2['source_channel'] = 'Movies and TV (top)'
         r2['target_channel'] = 'Movies and TV (scroll down)'
@@ -740,7 +755,7 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
     # TC08 – scroll right
     dir_scroll_rt = dir_path + "_ScrollRight"
     os.makedirs(dir_scroll_rt, exist_ok=True)
-    r3 = perform_motion_detection(ser, cap, run_idx, dir_scroll_rt, timeout, config, trigger_key='DpadRt')
+    r3 = perform_motion_detection(ser, cap, run_idx, dir_scroll_rt, timeout=5, config=config, trigger_key='DpadRt')
     if r3:
         r3['source_channel'] = 'Movies and TV (scroll down)'
         r3['target_channel'] = 'Movies and TV (scroll right)'
@@ -774,9 +789,11 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
     print("\n[STEP 2] DC Power Cycle (OFF 2 min)...")
-    run_ac_power_cycle(ip, 120)
+    send_key(ser, 'P_OFF', 0)
+    wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
+    send_key(ser, 'P_ON', 0)
+    wait_with_countdown_noKeyInput(60, "DC Power cycle for 1m")
 
-    wait_with_countdown_noKeyInput(60, "Boot Stabilization")
 
     print("\n[STEP 4] Launching Amazon...")
     send_key(ser, 'Home', 2)
@@ -784,9 +801,9 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+    send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
 
     print("\n[STEP 5] Launching Netflix...")
@@ -794,18 +811,18 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
     send_key(ser, 'Home', 2)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+    send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
     print("\n[STEP 7] Returning to Home...")
@@ -835,7 +852,7 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
 
     send_key(ser, 'P_ON', 0)
 
-    wait_with_countdown_noKeyInput(180, "Boot Stabilization")
+    wait_with_countdown_noKeyInput(60, "Boot Stabilization")
 
     print("\n[STEP 1] Live TV Fox 36-1...")
     send_key(ser, 'Exit', 2)
@@ -852,18 +869,18 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
     send_key(ser, 'Home', 3)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
     print("\n[STEP 7] Returning to Home...")
@@ -898,7 +915,7 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
 
     send_key(ser, 'P_ON', 0)
 
-    wait_with_countdown_noKeyInput(180, "Boot Stabilization")
+    wait_with_countdown_noKeyInput(60, "Boot Stabilization")
 
     print("\n[STEP 1] Live TV Fox 36-1...")
     send_key(ser, 'Exit', 2)
@@ -915,18 +932,18 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=45)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
     send_key(ser, 'Home', 3)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=45)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
-    send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=45)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
     print("\n[STEP 7] Returning to Home...")
@@ -990,24 +1007,24 @@ def get_user_configuration(selected_tcs):
     print("="*60 + "\n")
 
     while True:
-        ip = input("Enter Device IP Address (default: 192.168.5.3): ").strip()
+        ip = input("Enter AC Smart Plug IP Address (default: 192.168.4.214): ").strip()
         if not ip:
-            ip = "192.168.5.3"; break
+            ip = "192.168.4.214"; break
         if len(ip.split('.')) == 4:
             break
         print("❌ Invalid IP format.")
 
     while True:
-        port = input("Enter Serial Port (default: COM10): ").strip()
+        port = input("Enter Serial Port (default: COM13): ").strip()
         if not port:
-            port = "COM10"; break
+            port = "COM13"; break
         if port.upper().startswith("COM"):
             break
         print("❌ Invalid port format.")
 
     SoC  = input("Enter SoC Model (default: K25Lp): ").strip()  or "K25Lp"
-    SWV  = input("Enter Software Version (default: 33.30.98): ").strip() or "33.30.98"
-    LGCV = input("Enter LG CV Version (default: 4.0.18-2): ").strip()   or "4.0.18-2"
+    SWV  = input("Enter Software Version (default: 33.31.61): ").strip() or "33.31.61"
+    LGCV = input("Enter LG CV Version (default: 4.0.18-9): ").strip()   or "4.0.18-9"
 
     while True:
         try:
