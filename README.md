@@ -94,9 +94,19 @@ python LGC_TC_FullSuite.py
 
 ## Dependencies
 
+Install the required packages from `requirements.txt`:
+
 ```bash
-pip install opencv-python numpy pandas pyserial python-kasa keyboard winsound
+python -m pip install -r requirements.txt
 ```
+
+Alternatively install required packages manually:
+
+```bash
+pip install opencv-python numpy pandas pyserial python-kasa keyboard
+```
+
+> `winsound` is included in the Python standard library on Windows and does not need to be installed separately.
 
 ---
 

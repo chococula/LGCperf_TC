@@ -347,42 +347,60 @@ def make_dir(base_root, label, run_idx, ts_run, config, suffix=""):
 # =====================================================================
 
 def run_tc01(ser, cap, config, run_idx, csv_path):
+    TC01_REPEAT_COUNT = 5
     ip      = config['ip']
     timeout = 30
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC01", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
+    base_dir = make_dir("C:/Temp", "LGC_Perf_TC01", run_idx, ts_run, config)
+    print(f"Output directory: {base_dir}")
 
-    print("\n[PRE-CONDITION] Setting up test environment...")
+    # PRECONDITION (one time): LiveTV 36-1 for 1 minute, then Home for 1 minute.
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> Home (60s)")
     send_key(ser, 'LiveTV', 3)
     send_key(ser, 'Num_03', 1)
     send_key(ser, 'Num_06', 1)
     send_key(ser, 'DASH', 1)
     send_key(ser, 'Num_01', 1)
     send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
 
     send_key(ser, 'Home', 0)
-    wait_with_countdown_noKeyInput(60, "Power Stabilization")
+    wait_with_countdown_noKeyInput(60, "Home Screen Wait")
 
-    send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+    # REPEAT SCENARIO (five times):
+    # LiveTV 36-1 (60s) -> AC Off (60s) -> AC On (180s) -> LG Channels.
+    results = []
+    for cycle_idx in range(1, TC01_REPEAT_COUNT + 1):
+        print(f"\n[TC01] Scenario cycle {cycle_idx}/{TC01_REPEAT_COUNT}")
 
-    print("\n[AC POWER CYCLE] Starting power cycle...")
-    run_ac_power_cycle(ip, 60)
-    wait_with_countdown_noKeyInput(60, "Power Stabilization")
+        send_key(ser, 'LiveTV', 3)
+        send_key(ser, 'Num_03', 1)
+        send_key(ser, 'Num_06', 1)
+        send_key(ser, 'DASH', 1)
+        send_key(ser, 'Num_01', 1)
+        send_key(ser, 'OK', 2)
+        wait_with_countdown_noKeyInput(60, "Pre-load Channel")
 
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 2)
+        print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
+        run_ac_power_cycle(ip, 60)
+        wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
-    save_result(result, ts_run, csv_path, 'TC01')
-    return result
+        send_key(ser, 'Home', 2)
+        send_key(ser, 'DpadRt', 2)
+
+        cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+        result = perform_motion_detection(
+            ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='OK'
+        )
+        save_result(
+            result, ts_run, csv_path, 'TC01', extra_cols={'Cycle': cycle_idx}
+        )
+        if result:
+            result['cycle'] = cycle_idx
+            results.append(result)
+
+    return results
 
 
 # =====================================================================
