@@ -107,6 +107,35 @@ def prepare_channel_input(ser, channel, delay_range=(0.35, 0.9), confirm_with_ok
     return keys[:-1], keys[-1]
 
 
+def validate_channel_value(channel, default):
+    if not channel:
+        return default
+    if all(char in CHANNEL_KEY_MAP for char in str(channel)):
+        return channel
+    print(f"⚠ Invalid channel format: {channel}. Using default {default}.")
+    return default
+
+
+def go_to_channel(ser, channel, delay=1):
+    print(f"  ▶ Navigating to channel {channel}")
+    for key_name in channel_to_keys(channel):
+        send_key(ser, key_name, delay)
+    send_key(ser, 'OK', 0)
+
+
+def verify_t2_pga_channel_settings(config):
+    t2_channel = config.get('t2_channel', '443')
+    pga_channel = config.get('pga_channel', '442')
+    print(f"\n[CHANNEL CHECK] T2 Tennis channel: {t2_channel}")
+    print(f"[CHANNEL CHECK] PGA channel: {pga_channel}")
+    if t2_channel == pga_channel:
+        print("⚠ Warning: T2 and PGA channels are configured to the same value.")
+    if not channel_to_keys(t2_channel):
+        print(f"⚠ Unable to verify T2 channel format: {t2_channel}")
+    if not channel_to_keys(pga_channel):
+        print(f"⚠ Unable to verify PGA channel format: {pga_channel}")
+
+
 def send_shell_command_with_debug(ser, command):
     try:
         print(f"[DEBUG] Sending command: {command}")
@@ -252,6 +281,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
     winsound.Beep(800, 200)
     send_key(ser, trigger_key, 0)
     ser.flush()
+    winsound.Beep(1200, 150)
     start_time = time.perf_counter()
 
     print(f"[RUN {run_idx}] Trigger key: {trigger_key}")
@@ -292,6 +322,8 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
 
         if (time.perf_counter() - start_time) > timeout:
             print(f"❌ [RUN {run_idx}] Timeout: No motion in {timeout} seconds")
+            winsound.Beep(1000, 200)
+            winsound.Beep(1500, 250)
             break
 
         cv2.imshow('Motion Detection', curr_gray)
@@ -411,38 +443,61 @@ def run_tc02(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
     timeout = 20
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC02", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
+    base_dir = make_dir("C:/Temp", "LGC_Perf_TC02", run_idx, ts_run, config)
+    print(f"Output directory: {base_dir}")
 
-    print("\n[PRE-CONDITION] Setting up test environment...")
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> Home (60s)")
     send_key(ser, 'LiveTV', 0.5)
     send_key(ser, 'Num_03', 0.5)
     send_key(ser, 'Num_06', 0.5)
     send_key(ser, 'DASH', 0.5)
     send_key(ser, 'Num_01', 0.5)
     send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
 
-    print("\n[AC POWER CYCLE] Starting power cycle...")
-    run_ac_power_cycle(ip, 10)
-    wait_with_countdown_noKeyInput(60, "Power Stabilization")
+    send_key(ser, 'Home', 0)
+    wait_with_countdown_noKeyInput(60, "Home Screen Wait")
 
-    send_key(ser, 'Home', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 20)
+    TC02_REPEAT_COUNT = 5
+    results = []
+    for cycle_idx in range(1, TC02_REPEAT_COUNT + 1):
+        print(f"\n[TC02] Scenario cycle {cycle_idx}/{TC02_REPEAT_COUNT}")
 
-    send_shell_command_with_debug(ser, "stop preload-manager")
-    send_shell_command_with_debug(ser,
-        "luna-send -n 1 -f luna://com.webos.applicationManager/closeByAppId "
-        "'{\"id\": \"com.webos.app.lgchannels\"}'")
+        send_key(ser, 'LiveTV', 0.5)
+        send_key(ser, 'Num_03', 0.5)
+        send_key(ser, 'Num_06', 0.5)
+        send_key(ser, 'DASH', 0.5)
+        send_key(ser, 'Num_01', 0.5)
+        send_key(ser, 'OK', 2)
+        wait_with_countdown_noKeyInput(60, "Pre-load Channel")
 
-    send_key(ser, 'Home', 1)
-    wait_with_countdown_noKeyInput(30, "Cool-down")
-    send_key(ser, 'DpadRt', 2)
+        print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
+        run_ac_power_cycle(ip, 60)
+        wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
-    save_result(result, ts_run, csv_path, 'TC02')
-    return result
+        send_key(ser, 'Home', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'OK', 20)
+
+        send_shell_command_with_debug(ser, "stop preload-manager")
+        send_shell_command_with_debug(ser,
+            "luna-send -n 1 -f luna://com.webos.applicationManager/closeByAppId "
+            "'{\"id\": \"com.webos.app.lgchannels\"}'")
+
+        send_key(ser, 'Home', 1)
+        wait_with_countdown_noKeyInput(30, "Home wait")
+        send_key(ser, 'DpadRt', 2)
+
+        cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='OK')
+        save_result(result, ts_run, csv_path, 'TC02', extra_cols={'Cycle': cycle_idx})
+        if result:
+            result['cycle'] = cycle_idx
+            results.append(result)
+
+    return results
 
 
 def run_tc02_between_runs(ser):
@@ -489,15 +544,67 @@ def setup_tc03(ser, cap, config):
 
 
 def run_tc03(ser, cap, config, run_idx, csv_path):
+    ip      = config['ip']
     timeout = config['timeout']
+    t2_channel = config.get('t2_channel', '443')
+    pga_channel = config.get('pga_channel', '442')
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC03", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
+    base_dir = make_dir("C:/Temp", "LGC_Perf_TC03", run_idx, ts_run, config)
+    print(f"Output directory: {base_dir}")
 
-    send_key(ser, 'ChDown', 10)
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp')
-    save_result(result, ts_run, csv_path, 'TC03')
-    return result
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> AC Power Off -> AC Power On -> Home PIP LiveTV")
+    send_key(ser, 'LiveTV', 0.5)
+    send_key(ser, 'Num_03', 0.5)
+    send_key(ser, 'Num_06', 0.5)
+    send_key(ser, 'DASH', 0.5)
+    send_key(ser, 'Num_01', 0.5)
+    send_key(ser, 'OK', 2)
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1")
+
+    print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
+    run_ac_power_cycle(ip, 60)
+    wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
+
+    send_key(ser, 'Home', 1)
+    send_key(ser, 'DpadDn', 2)
+    send_key(ser, 'OK', 10)
+
+    print("\n[STEP] Entering channel 11-1 (NBC)")
+    for key_name in channel_to_keys('11-1'):
+        send_key(ser, key_name, 1)
+    send_key(ser, 'OK', 2)
+    wait_with_countdown_noKeyInput(180, "NBC 11-1")
+
+    print(f"\n[STEP] Entering channel {t2_channel} (T2 Tennis)")
+    go_to_channel(ser, t2_channel, delay=1)
+    wait_with_countdown_noKeyInput(10, "T2 Tennis Stabilization")
+
+    print(f"\n[CHANNEL CHECK] Configured PGA channel: {pga_channel}")
+    TC03_REPEAT_COUNT = 5
+    results = []
+    for cycle_idx in range(1, TC03_REPEAT_COUNT + 1):
+        print(f"\n[TC03] Scenario cycle {cycle_idx}/{TC03_REPEAT_COUNT}")
+
+        print("\n[TC03] Starting measurement with ChDown on T2 Tennis")
+        cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+
+        result = perform_motion_detection(
+            ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChDown'
+        )
+        save_result(result, ts_run, csv_path, 'TC03', extra_cols={'Cycle': cycle_idx, 'PGA_Channel': pga_channel})
+        if result:
+            result['cycle'] = cycle_idx
+            result['pga_channel'] = pga_channel
+            results.append(result)
+
+        wait_with_countdown_noKeyInput(10, "PGA Channel wait")
+
+        print(f"\n[TC03] Returning to {t2_channel} T2 Tennis Channel")
+        go_to_channel(ser, t2_channel, delay=1)
+        wait_with_countdown_noKeyInput(5, f"{t2_channel} T2 Tennis channel wait")
+
+    return results
 
 
 # =====================================================================
@@ -505,8 +612,9 @@ def run_tc03(ser, cap, config, run_idx, csv_path):
 # =====================================================================
 
 TC04_SOURCE_CHANNEL       = "11-1"
-TC04_TARGET_CHANNEL       = "450"
+TC04_TARGET_CHANNEL       = "443"
 TC04_USE_OK_TO_CONFIRM    = True
+TC04_REPEAT_COUNT         = 5
 
 
 def setup_tc04(ser, cap, config):
@@ -535,27 +643,45 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
     timeout = config['timeout']
     source  = TC04_SOURCE_CHANNEL
     target  = TC04_TARGET_CHANNEL
+    target = config.get('t2_channel', target)
 
     ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC04", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
 
-    print(f"[RUN {run_idx}] Source channel: {source}")
-    for key_name in channel_to_keys(source):
-        send_key_human_like(ser, key_name)
-    send_key(ser, 'OK', 0)
-    wait_with_countdown_noKeyInput(180, f"Source channel {source} stabilization")
+    results = []
+    for cycle_idx in range(1, TC04_REPEAT_COUNT + 1):
+        print(f"\n[TC04] Scenario cycle {cycle_idx}/{TC04_REPEAT_COUNT}")
 
-    print(f"[RUN {run_idx}] Target channel: {target}")
-    _, trigger_key = prepare_channel_input(ser, target, confirm_with_ok=TC04_USE_OK_TO_CONFIRM)
+        print(f"[RUN {run_idx}] Entering source channel: {source}")
+        for key_name in channel_to_keys(source):
+            send_key_human_like(ser, key_name)
+        send_key(ser, 'OK', 0)
+        wait_with_countdown_noKeyInput(180, f"Source channel {source} stabilization")
 
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key)
-    if result:
-        result['source_channel'] = source
-        result['target_channel'] = target
-    save_result(result, ts_run, csv_path, 'TC04',
-                extra_cols={'Source_Channel': source, 'Target_Channel': target})
-    return result
+        print(f"[RUN {run_idx}] Target channel: {target}")
+        _, trigger_key = prepare_channel_input(ser, target, confirm_with_ok=TC04_USE_OK_TO_CONFIRM)
+
+        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key)
+        if result:
+            result['source_channel'] = source
+            result['target_channel'] = target
+            result['cycle'] = cycle_idx
+            results.append(result)
+        save_result(result, ts_run, csv_path, 'TC04',
+                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': source, 'Target_Channel': target})
+
+        wait_with_countdown_noKeyInput(10, f"Cycle {cycle_idx} stabilization")
+        print(f"[RUN {run_idx}] Returning to source channel: {source}")
+        for key_name in channel_to_keys(source):
+            send_key_human_like(ser, key_name)
+        send_key(ser, 'OK', 0)
+        wait_with_countdown_noKeyInput(5, f"Source channel {source} wait for next cycle")
+
+    return results
 
 
 # =====================================================================
@@ -1066,6 +1192,12 @@ def get_user_configuration(selected_tcs):
         'num_runs': num_runs, 'timeout': timeout,
     }
 
+    if 'TC03' in selected_tcs or 'TC04' in selected_tcs:
+        t2_channel = input("T2 Tennis Channel (default: 443): ").strip() or "443"
+        pga_channel = input("PGA Channel (default: 442): ").strip() or "442"
+        config['t2_channel'] = validate_channel_value(t2_channel, "443")
+        config['pga_channel'] = validate_channel_value(pga_channel, "442")
+
     if 'TC05_NtN' in selected_tcs:
         config['native_previous_channel'] = (
             input("TC05_NtN – Native Previous Channel (default: 443): ").strip() or "443"
@@ -1200,6 +1332,9 @@ def main():
 
     ser = initialize_serial(port)
 
+    if 'TC03' in selected_tcs or 'TC04' in selected_tcs:
+        verify_t2_pga_channel_settings(config)
+
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"
     os.makedirs("C:/Temp", exist_ok=True)
@@ -1207,8 +1342,9 @@ def main():
     all_results = []
 
     for tc_label in selected_tcs:
+        tc_runs = 1 if tc_label in ('TC01', 'TC02', 'TC03') else num_runs
         print(f"\n{'='*60}")
-        print(f"  ▶▶▶  {tc_label}  ({num_runs} runs)")
+        print(f"  ▶▶▶  {tc_label}  ({tc_runs} runs)")
         print(f"{'='*60}")
 
         # One-time setup if needed
@@ -1225,9 +1361,9 @@ def main():
             continue
 
         tc_results = []
-        for run_idx in range(1, num_runs + 1):
+        for run_idx in range(1, tc_runs + 1):
             print(f"\n{'='*60}")
-            print(f"  [{tc_label}] RUN {run_idx}/{num_runs}")
+            print(f"  [{tc_label}] RUN {run_idx}/{tc_runs}")
             print(f"{'='*60}")
             try:
                 result = run_fn(ser, cap, config, run_idx, csv_path)
@@ -1238,7 +1374,7 @@ def main():
             except Exception as e:
                 print(f"❌ Error in {tc_label} run {run_idx}: {e}")
 
-            if run_idx < num_runs:
+            if run_idx < tc_runs:
                 wait_with_countdown_noKeyInput(10, "Interval between runs")
                 if tc_label in TC_BETWEEN_RUNS_MAP:
                     try:
