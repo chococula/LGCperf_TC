@@ -640,6 +640,7 @@ def setup_tc04(ser, cap, config):
 
 
 def run_tc04(ser, cap, config, run_idx, csv_path):
+    ip      = config['ip']
     timeout = config['timeout']
     source  = TC04_SOURCE_CHANNEL
     target  = TC04_TARGET_CHANNEL
@@ -648,6 +649,23 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
     ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC04", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
+
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> AC Power Off -> AC Power On -> Home PIP LiveTV")
+    send_key(ser, 'LiveTV', 0.5)
+    send_key(ser, 'Num_03', 0.5)
+    send_key(ser, 'Num_06', 0.5)
+    send_key(ser, 'DASH', 0.5)
+    send_key(ser, 'Num_01', 0.5)
+    send_key(ser, 'OK', 2)
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1")
+
+    print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
+    run_ac_power_cycle(ip, 60)
+    wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
+
+    send_key(ser, 'Home', 1)
+    send_key(ser, 'DpadDn', 2)
+    send_key(ser, 'OK', 10)
 
     results = []
     for cycle_idx in range(1, TC04_REPEAT_COUNT + 1):
@@ -717,30 +735,45 @@ def setup_tc05_ntn(ser, cap, config):
 
     send_key(ser, 'DpadDn', 3)
     send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'OK', 10)
+    send_key(ser, 'OK', 2)
+    wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30)
 
+    send_key(ser, 'Num_00', 1.5)  # throwaway digit: first keypress lands before the entry field is ready
     for key_name in channel_to_keys(native_previous):
-        send_key(ser, key_name, 1)
+        send_key(ser, key_name, 1.5)
     send_key(ser, 'OK', 5)
     send_key(ser, 'Back', 5)
 
 
+TC05_NTN_REPEAT_COUNT = 5
+
+
 def run_tc05_ntn(ser, cap, config, run_idx, csv_path):
     timeout         = config['timeout']
-    native_previous = config.get('native_previous_channel', '443')
+    native_previous = config.get('native_previous_channel', '0443')
 
     ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC05_NtN", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
 
-    send_key(ser, 'ChDown', 10)
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp')
-    if result:
-        result['source_channel'] = native_previous
-        result['target_channel'] = 'Native+1'
-    save_result(result, ts_run, csv_path, 'TC05_NtN',
-                extra_cols={'Source_Channel': native_previous, 'Target_Channel': 'Native+1'})
-    return result
+    results = []
+    for cycle_idx in range(1, TC05_NTN_REPEAT_COUNT + 1):
+        print(f"\n[TC05_NtN] Scenario cycle {cycle_idx}/{TC05_NTN_REPEAT_COUNT}")
+
+        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+
+        send_key(ser, 'ChDown', 10)
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp')
+        if result:
+            result['source_channel'] = native_previous
+            result['target_channel'] = 'Native+1'
+            result['cycle'] = cycle_idx
+            results.append(result)
+        save_result(result, ts_run, csv_path, 'TC05_NtN',
+                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': native_previous, 'Target_Channel': 'Native+1'})
+
+    return results
 
 
 # =====================================================================
@@ -748,6 +781,7 @@ def run_tc05_ntn(ser, cap, config, run_idx, csv_path):
 # =====================================================================
 
 def setup_tc05_ntp(ser, cap, config):
+    ip = config['ip']
     pluto_ch = config.get('pluto_channel_ntp', '151')
     print("\n[TC05_NtP SETUP] Setting up test environment...")
     send_key(ser, 'Exit', 2)
@@ -757,17 +791,34 @@ def setup_tc05_ntp(ser, cap, config):
     send_key(ser, 'DASH', 1)
     send_key(ser, 'Num_01', 1)
     send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
+
+    run_ac_power_cycle(ip, 60)
+    wait_with_countdown_noKeyInput(180, "Power Stabilization")
 
     send_key(ser, 'Exit', 2)
     send_key(ser, 'Home', 2)
     send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 10)
+    send_key(ser, 'OK', 15)
 
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+
+    send_key(ser, 'DpadDn', 3)
+    send_key(ser, 'DpadDn', 3)
+    send_key(ser, 'OK', 2)
+    wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30)
+
+    send_key(ser, 'Num_00', 1.5)  # throwaway digit: first keypress lands before the entry field is ready
     for key_name in channel_to_keys(pluto_ch):
-        send_key(ser, key_name, 2)
+        send_key(ser, key_name, 1.5)
     send_key(ser, 'OK', 5)
     send_key(ser, 'Back', 5)
+
+
+TC05_NTP_REPEAT_COUNT = 5
 
 
 def run_tc05_ntp(ser, cap, config, run_idx, csv_path):
@@ -778,14 +829,24 @@ def run_tc05_ntp(ser, cap, config, run_idx, csv_path):
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC05_NtP", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
 
-    send_key(ser, 'ChDown', 10)
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp')
-    if result:
-        result['source_channel'] = 'Native'
-        result['target_channel'] = pluto_ch
-    save_result(result, ts_run, csv_path, 'TC05_NtP',
-                extra_cols={'Source_Channel': 'Native', 'Target_Channel': pluto_ch})
-    return result
+    results = []
+    for cycle_idx in range(1, TC05_NTP_REPEAT_COUNT + 1):
+        print(f"\n[TC05_NtP] Scenario cycle {cycle_idx}/{TC05_NTP_REPEAT_COUNT}")
+
+        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+
+        send_key(ser, 'ChDown', 10)
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp')
+        if result:
+            result['source_channel'] = 'Native'
+            result['target_channel'] = pluto_ch
+            result['cycle'] = cycle_idx
+            results.append(result)
+        save_result(result, ts_run, csv_path, 'TC05_NtP',
+                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': 'Native', 'Target_Channel': pluto_ch})
+
+    return results
 
 
 # =====================================================================
@@ -793,6 +854,7 @@ def run_tc05_ntp(ser, cap, config, run_idx, csv_path):
 # =====================================================================
 
 def setup_tc05_ptp(ser, cap, config):
+    ip = config['ip']
     pluto_ch = config.get('pluto_channel_ptp', '220')
     print("\n[TC05_PtP SETUP] Setting up test environment...")
     send_key(ser, 'Exit', 2)
@@ -802,17 +864,34 @@ def setup_tc05_ptp(ser, cap, config):
     send_key(ser, 'DASH', 1)
     send_key(ser, 'Num_01', 1)
     send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
+
+    run_ac_power_cycle(ip, 60)
+    wait_with_countdown_noKeyInput(180, "Power Stabilization")
 
     send_key(ser, 'Exit', 2)
     send_key(ser, 'Home', 2)
     send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 10)
+    send_key(ser, 'OK', 15)
 
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+    send_key(ser, 'DpadLt', 3)
+
+    send_key(ser, 'DpadDn', 3)
+    send_key(ser, 'DpadDn', 3)
+    send_key(ser, 'OK', 2)
+    wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30)
+
+    send_key(ser, 'Num_00', 1.5)  # throwaway digit: first keypress lands before the entry field is ready
     for key_name in channel_to_keys(pluto_ch):
-        send_key(ser, key_name, 2)
+        send_key(ser, key_name, 1.5)
     send_key(ser, 'OK', 5)
     send_key(ser, 'Back', 5)
+
+
+TC05_PTP_REPEAT_COUNT = 5
 
 
 def run_tc05_ptp(ser, cap, config, run_idx, csv_path):
@@ -823,14 +902,24 @@ def run_tc05_ptp(ser, cap, config, run_idx, csv_path):
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC05_PtP", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
 
-    send_key(ser, 'ChDown', 10)
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp')
-    if result:
-        result['source_channel'] = pluto_ch
-        result['target_channel'] = 'Pluto+1'
-    save_result(result, ts_run, csv_path, 'TC05_PtP',
-                extra_cols={'Source_Channel': pluto_ch, 'Target_Channel': 'Pluto+1'})
-    return result
+    results = []
+    for cycle_idx in range(1, TC05_PTP_REPEAT_COUNT + 1):
+        print(f"\n[TC05_PtP] Scenario cycle {cycle_idx}/{TC05_PTP_REPEAT_COUNT}")
+
+        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+
+        send_key(ser, 'ChDown', 10)
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp')
+        if result:
+            result['source_channel'] = pluto_ch
+            result['target_channel'] = 'Pluto+1'
+            result['cycle'] = cycle_idx
+            results.append(result)
+        save_result(result, ts_run, csv_path, 'TC05_PtP',
+                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': pluto_ch, 'Target_Channel': 'Pluto+1'})
+
+    return results
 
 
 # =====================================================================
@@ -915,6 +1004,9 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
 # ===== TC10 – Real World 01 =========================================
 # =====================================================================
 
+TC10_REPEAT_COUNT = 5
+
+
 def run_tc10(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
     timeout = config['timeout']
@@ -922,25 +1014,8 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
     dir_path = make_dir("C:/Temp", "LGC_Perf_TC10", run_idx, ts_run, config)
     print(f"Output directory: {dir_path}")
 
-    print("\n[STEP 1] Live TV Fox 36-1...")
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'LiveTV', 5)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
-
-    print("\n[STEP 2] DC Power Cycle (OFF 2 min)...")
-    send_key(ser, 'P_OFF', 0)
-    wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
-    send_key(ser, 'P_ON', 0)
-    wait_with_countdown_noKeyInput(60, "DC Power cycle for 1m")
-
-
-    print("\n[STEP 4] Launching Amazon...")
-    send_key(ser, 'Home', 2)
+    print("\n[SETUP] Installing/launching Amazon...")
+    send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
@@ -950,8 +1025,9 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
 
-    print("\n[STEP 5] Launching Netflix...")
-    send_key(ser, 'Home', 2)
+    print("\n[SETUP] Installing/launching Netflix...")
+    send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+    wait_for_app_ready(cap, motion_timeout=3, stable_timeout=7)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
@@ -960,25 +1036,81 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
-    print("\n[STEP 6] Launching YouTube...")
-    send_key(ser, 'Home', 2)
+    print("\n[SETUP] Launching YouTube...")
+    send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'DpadRt', 1)
     send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
     send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
     send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
-    wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
+    wait_with_countdown_noKeyInput(60, "YouTube Video Playback")
 
-    print("\n[STEP 7] Returning to Home...")
-    send_key(ser, 'Home', 2)
-    wait_with_countdown_noKeyInput(30, "Home Screen")
+    results = []
+    for cycle_idx in range(1, TC10_REPEAT_COUNT + 1):
+        print(f"\n[TC10] Scenario cycle {cycle_idx}/{TC10_REPEAT_COUNT}")
+        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
 
-    print("\n[STEP 8] Entering LG Channels - measuring load time...")
-    send_key(ser, 'DpadRt', 2)
+        print("\n[STEP 1] Live TV Fox 36-1...")
+        send_key(ser, 'Exit', 2)
+        send_key(ser, 'LiveTV', 5);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+        send_key(ser, 'Num_03', 1)
+        send_key(ser, 'Num_06', 1)
+        send_key(ser, 'DASH', 1)
+        send_key(ser, 'Num_01', 1)
+        send_key(ser, 'OK', 5)
+        wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
-    result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
-    save_result(result, ts_run, csv_path, 'TC10')
-    return result
+        print("\n[STEP 2] DC Power Cycle (OFF 2 min)...")
+        send_key(ser, 'P_OFF', 0)
+        wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
+        send_key(ser, 'P_ON', 0)
+        wait_with_countdown_noKeyInput(60, "DC Power cycle for 1m")
+
+        print("\n[STEP 4] Launching Amazon...")
+        send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+        send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
+        wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
+
+        print("\n[STEP 5] Launching Netflix...")
+        send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+        send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+        send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+        wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
+
+        print("\n[STEP 6] Launching YouTube...")
+        send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'DpadRt', 1)
+        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
+        send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
+        wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
+
+        print("\n[STEP 7] Returning to Home...")
+        send_key(ser, 'Home', 2)
+        wait_with_countdown_noKeyInput(30, "Home Screen")
+
+        print("\n[STEP 8] Entering LG Channels - measuring load time...")
+        send_key(ser, 'DpadRt', 2)
+
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='OK')
+        if result:
+            result['cycle'] = cycle_idx
+            results.append(result)
+        save_result(result, ts_run, csv_path, 'TC10', extra_cols={'Cycle': cycle_idx})
+
+    return results
 
 
 # =====================================================================
@@ -999,7 +1131,7 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Boot Stabilization")
 
     print("\n[STEP 1] Live TV Fox 36-1...")
-    send_key(ser, 'Exit', 2)
+    send_key(ser, 'Exit', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'LiveTV', 5)
     send_key(ser, 'Num_03', 1)
     send_key(ser, 'Num_06', 1)
@@ -1009,7 +1141,7 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
     print("\n[STEP 5] Launching Netflix...")
-    send_key(ser, 'Home', 3)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
@@ -1019,7 +1151,7 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
-    send_key(ser, 'Home', 3)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
@@ -1028,15 +1160,16 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
     print("\n[STEP 7] Returning to Home...")
-    send_key(ser, 'Home', 2)
+    send_key(ser, 'Home', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     wait_with_countdown_noKeyInput(30, "Home Screen")
 
-    print("\n[STEP 8] Entering PIP...")
+    print("\n[STEP 8] Before PIP is on...")
     send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 1)
+    send_key(ser, 'OK', 3)
+    
 
     print("\n[STEP 9] Entering LG Channels - measuring load time...")
-    send_key(ser, 'Home', 3)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
 
     result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
@@ -1062,7 +1195,7 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Boot Stabilization")
 
     print("\n[STEP 1] Live TV Fox 36-1...")
-    send_key(ser, 'Exit', 2)
+    send_key(ser, 'Exit', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'LiveTV', 5)
     send_key(ser, 'Num_03', 1)
     send_key(ser, 'Num_06', 1)
@@ -1072,7 +1205,7 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
     print("\n[STEP 5] Launching Netflix...")
-    send_key(ser, 'Home', 3)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
@@ -1082,7 +1215,7 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
-    send_key(ser, 'Home', 3)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=45)
@@ -1096,11 +1229,12 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
 
     print("\n[STEP 8] PIP → Full Screen...")
     send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 1)
+    wait_with_countdown_noKeyInput(50, "PIP to Alive")
+    send_key(ser, 'OK', 3)
     wait_with_countdown_noKeyInput(10, "PIP to Full Screen")
 
     print("\n[STEP 9] Entering LG Channels - measuring load time...")
-    send_key(ser, 'Home', 2)
+    send_key(ser, 'Home', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
 
     result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
@@ -1342,7 +1476,7 @@ def main():
     all_results = []
 
     for tc_label in selected_tcs:
-        tc_runs = 1 if tc_label in ('TC01', 'TC02', 'TC03') else num_runs
+        tc_runs = 1 if tc_label in ('TC01', 'TC02', 'TC03', 'TC04', 'TC05_NtN', 'TC05_NtP', 'TC05_PtP', 'TC10') else num_runs
         print(f"\n{'='*60}")
         print(f"  ▶▶▶  {tc_label}  ({tc_runs} runs)")
         print(f"{'='*60}")
