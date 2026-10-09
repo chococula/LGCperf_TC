@@ -417,7 +417,7 @@ def run_tc01(ser, cap, config, run_idx, csv_path):
         run_ac_power_cycle(ip, 60)
         wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-        send_key(ser, 'Home', 2)
+        send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
         send_key(ser, 'DpadRt', 2)
 
         cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
@@ -651,11 +651,11 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
     print(f"Output directory: {dir_path}")
 
     print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> AC Power Off -> AC Power On -> Home PIP LiveTV")
-    send_key(ser, 'LiveTV', 0.5)
-    send_key(ser, 'Num_03', 0.5)
-    send_key(ser, 'Num_06', 0.5)
-    send_key(ser, 'DASH', 0.5)
-    send_key(ser, 'Num_01', 0.5)
+    send_key(ser, 'LiveTV', 1.5)
+    send_key(ser, 'Num_03', 1.5)
+    send_key(ser, 'Num_06', 1.5)
+    send_key(ser, 'DASH', 1.5)
+    send_key(ser, 'Num_01', 1.5)
     send_key(ser, 'OK', 2)
     wait_with_countdown_noKeyInput(60, "LiveTV 36-1")
 
@@ -663,7 +663,7 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
     run_ac_power_cycle(ip, 60)
     wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    send_key(ser, 'Home', 1)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadDn', 2)
     send_key(ser, 'OK', 10)
 
@@ -950,7 +950,7 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
     print("\n[STEP 4] Entering LG Channels...")
-    send_key(ser, 'Home', 2)
+    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     send_key(ser, 'DpadRt', 2)
     send_key(ser, 'OK', 2)
     wait_with_countdown_noKeyInput(30, "LG Channels Loading")
