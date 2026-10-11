@@ -4,3 +4,4 @@ pandas
 pyserial
 python-kasa
 keyboard
+imageio-ffmpeg
