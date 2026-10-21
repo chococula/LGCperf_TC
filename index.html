@@ -34,6 +34,7 @@
     --s1: #5bb2ec; --s2: #f0a254; --s3: #5fd0a6; --s4: #b597f0; --s5: #f07fb3; --s6: #8fb4cc;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-body); }
   .wrap { max-width: 1280px; margin: 0 auto; padding-block: 24px 48px;
           padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
@@ -175,7 +176,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value far from its build's median; it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b3</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b4</p>
 </div>
 
 <script>
@@ -202,7 +203,11 @@ function esc(value) {
 }
 function num(value) { const n = parseFloat(String(value).replace(/,/g, '')); return isFinite(n) ? n : null; }
 function fmt(n, digits = 0) { return n == null ? '–' : n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }); }
-function buildKey(r) { return [r.SoC, r.SWV, r.LGCV].filter(Boolean).join(' / ') || 'Unknown'; }
+// Older CSV rows have no SoC/SWV/LGCV columns; read them from the output folder name instead.
+function buildKey(r) {
+  const fromDir = String(r.Directory || '').match(/_([^_\/]+)_SWV([^_\/]+)_LGCV([^_\/]+)$/) || [];
+  return [r.SoC || fromDir[1], r.SWV || fromDir[2], r.LGCV || fromDir[3]].filter(Boolean).join(' / ') || 'Unknown';
+}
 function rowId(r) { return state.tc + '|' + r.Row_ID; }
 function isExcluded(r) { return String(r.Excluded).toUpperCase() === 'Y'; }
 function dayOf(r) { const m = String(r.Timestamp).match(/^(\d{4})(\d{2})(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]}` : ''; }
@@ -397,7 +402,7 @@ function render() {
   const outliers = outlierSet(statRows, metric);
   const values = statRows.map(r => num(r[metric])).filter(v => v != null);
   renderCards(rows, included, statRows, outliers, stats(values));
-  renderTrend(included, metric, outliers);
+  renderTrend(included.filter(r => r.Status !== 'INVALID'), metric, outliers);
   renderBuilds(statRows, metric);
   const shown = document.getElementById('show-excluded').checked ? rows : included;
   renderTable(shown, metric, outliers, rows.length - included.length);
