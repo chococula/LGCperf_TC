@@ -1,10 +1,11 @@
 """Omedia_TC02 - Samsung TV Plus Live TV channel zapping (Ch Up) time.
 
-Setup (two user inputs):
+Setup: first the number of precondition steps is asked (default 2), then one click per step:
   1. Home is shown; click the Samsung TV Plus card (Down) or its bottom app icon (Down, Down), as in
      PACE_01, and OK opens it. If Home stays on screen, click it again on that view.
-  2. The opened TV Plus screen is captured; click the Live TV channel to enter. The camera walks the
-     focus there (or move it with the keyboard arrow keys), then OK enters the channel.
+  2.. Every later step (e.g. the Live TV channel inside TV Plus): the new screen is captured, click
+     where to go; the camera walks the focus there (or move it with the keyboard arrow keys), then OK.
+  Clicked spots and keys are saved per step; keeping a saved spot replays its keys.
   The middle of the playing picture is used to detect playback; its motion sets the threshold.
 Each run:
   2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
@@ -32,7 +33,6 @@ from run_video import make_run_videos
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_config.json")
-TVPLUS_SCREEN_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_tvplus_screen.jpg")
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'Samsung',
     'SoC': 'U8000',
@@ -43,8 +43,8 @@ DEFAULT_CONFIGURATION = {
     'zap_interval_seconds': 8,
     'route': [],
     'target_point': [],
-    'channel_route': [],
-    'channel_point': [],
+    'precondition_steps': 2,
+    'steps': [],
     'stream_roi': [],
     'motion_threshold': 0.0,
 }
@@ -105,6 +105,9 @@ def get_user_configuration():
     timeout = ask_number("Enter zap timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
     zap_interval_seconds = ask_number("Enter seconds to watch each channel before the next Ch Up",
                                       defaults['zap_interval_seconds'], int, lambda v: v >= 0)
+    precondition_steps = ask_number("How many screens to click through before Ch Up "
+                                    "(e.g. 2 = TV Plus on Home, then the Live TV channel)",
+                                    defaults['precondition_steps'], int, lambda v: v >= 1)
 
     configuration = dict(defaults)
     configuration.update({
@@ -115,9 +118,11 @@ def get_user_configuration():
         'num_runs': num_runs,
         'timeout': timeout,
         'zap_interval_seconds': zap_interval_seconds,
+        'precondition_steps': precondition_steps,
     })
     print("\nConfiguration:")
-    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds'):
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds',
+                'precondition_steps'):
         print(f"  {key}: {configuration[key]}")
     if configuration['route']:
         print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
@@ -434,21 +439,21 @@ def open_clicked_live_tv(configuration, camera, point, frame_shape, context):
     print(f"[SETUP] Opening {APP_NAME}: Home -> {', '.join(route)} -> OK")
     press_home(manufacturer, camera)
     replay_route(route, manufacturer, camera)
-    context['home_ready'] = capture_home_ready(camera)
+    context['previous_screen'] = capture_home_ready(camera)
     configuration['route'] = route
     configuration['target_point'] = [int(point[0]), int(point[1])]
     save_configuration(CONFIG_FILE, configuration)
     send_key('OK', manufacturer)
 
 
-def capture_tvplus_screen(configuration, camera, calibration_dir, context):
-    """Live view after OK; Enter captures the TV Plus screen once it is no longer the Home screen.
+def capture_next_screen(configuration, camera, calibration_dir, context, step_no, allow_home_reclick):
+    """Live view after OK; Enter captures the new screen once it differs from the screen before OK.
 
-    While the camera still sees Home, a click on the view chooses which tile to open.
+    For the step right after Home, a click while Home is still showing chooses the tile to open.
     """
     manufacturer = configuration['manufacturer']
-    print(f"\n[SETUP] {APP_NAME} is opening. When it has loaded, press ENTER in the camera window to "
-          "capture the screen. If Home stays on screen, click the tile to open (O = send OK again, Q = cancel).")
+    print(f"\n[SETUP] Step {step_no}: the next screen is opening. When it has loaded, press ENTER in the "
+          "camera window to capture it (O = send OK again, Q = cancel).")
     clicks = []
 
     def on_mouse(event, x, y, flags, parameter):
@@ -456,7 +461,7 @@ def capture_tvplus_screen(configuration, camera, calibration_dir, context):
             clicks.append((x, y))
 
     cv2.setMouseCallback(CAPTURE_WINDOW, on_mouse)
-    # Drop key presses left over from earlier windows (e.g. a held Enter) so they cannot capture Home.
+    # Drop key presses left over from earlier windows (e.g. a held Enter) so they cannot capture the old screen.
     for _ in range(50):
         if cv2.waitKey(1) == -1:
             break
@@ -464,22 +469,23 @@ def capture_tvplus_screen(configuration, camera, calibration_dir, context):
         frame = read_frame(camera)
         if frame is None:
             continue
-        on_home = screen_similarity(frame, context['home_ready']) >= HOME_READY_SIMILARITY
-        if on_home and clicks:
+        unchanged = screen_similarity(frame, context['previous_screen']) >= HOME_READY_SIMILARITY
+        if unchanged and clicks and allow_home_reclick:
             open_clicked_live_tv(configuration, camera, clicks.pop(), frame.shape, context)
             clicks.clear()
             continue
         clicks.clear()
-        if on_home:
-            lines = [(f"Still the Home screen - waiting for {APP_NAME} to open", (0, 255, 255), 1.0),
-                     ("Click the tile to open,  O = send OK again", (0, 255, 255), 0.9)]
+        if unchanged:
+            lines = [("Still the previous screen - waiting for the next one", (0, 255, 255), 1.0),
+                     ("Click the tile to open,  O = send OK again" if allow_home_reclick else "O = send OK again",
+                      (0, 255, 255), 0.9)]
         else:
-            lines = [(f"{APP_NAME}: press ENTER when it has loaded", (0, 255, 0), 1.0)]
+            lines = [(f"Step {step_no}: press ENTER when this screen has loaded", (0, 255, 0), 1.0)]
         cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), lines))
         key = cv2.waitKey(1) & 0xFF
         if key in (10, 13):
-            if on_home:
-                print(f"[SETUP] The camera still sees the Home screen; wait until {APP_NAME} is showing.")
+            if unchanged:
+                print("[SETUP] The camera still sees the previous screen; wait until the next one is showing.")
                 continue
             for _ in range(3):              # fresh frames taken after the key press
                 fresh = read_frame(camera)
@@ -491,32 +497,33 @@ def capture_tvplus_screen(configuration, camera, calibration_dir, context):
         if key == ord('q'):
             raise KeyboardInterrupt("Setup canceled.")
     cv2.setMouseCallback(CAPTURE_WINDOW, lambda *a: None)
-    for path in (TVPLUS_SCREEN_FILE, os.path.join(calibration_dir, "tvplus_screen.jpg")):
-        cv2.imwrite(path, frame)
-    print(f"[SETUP] Captured the {APP_NAME} screen: {TVPLUS_SCREEN_FILE}")
+    cv2.imwrite(os.path.join(calibration_dir, f"step{step_no}_screen.jpg"), frame)
+    print(f"[SETUP] Captured the step {step_no} screen.")
     return frame
 
 
-def click_channel(screen):
-    """On the captured TV Plus screen, the user clicks the Live TV channel to enter."""
-    window_name = "Select Live TV channel"
-    selection = {'point': None}
+def click_on_screen(screen, step_no, saved_point=None):
+    """On the captured screen, the user clicks where to go (a saved spot is pre-marked)."""
+    window_name = f"Step {step_no}: select where to go"
+    selection = {'point': tuple(saved_point) if saved_point else None}
 
     def on_mouse(event, x, y, flags, parameter):
         if event == cv2.EVENT_LBUTTONDOWN:
             selection['point'] = (x, y)
 
-    print("\n[SETUP] Click the Live TV channel to enter on the captured screen, then press Enter (Q = cancel).")
+    print(f"\n[SETUP] Step {step_no}: click where to go on the captured screen, then press Enter (Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
         preview = screen.copy()
         if selection['point'] is None:
-            lines = [("Click the Live TV channel to enter, then ENTER", (0, 255, 0), 1.0)]
+            lines = [(f"Step {step_no}: click where to go, then ENTER", (0, 255, 0), 1.0)]
         else:
             cv2.drawMarker(preview, selection['point'], (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
             cv2.circle(preview, selection['point'], 16, (0, 255, 0), 2)
-            lines = [("ENTER = go to this channel,  click again to change", (0, 255, 0), 1.0)]
+            same = saved_point and tuple(selection['point']) == tuple(saved_point)
+            lines = [("ENTER = use the saved spot,  or click another" if same
+                      else "ENTER = go there,  click again to change", (0, 255, 0), 1.0)]
         cv2.imshow(window_name, draw_overlay(preview, lines))
         key = cv2.waitKey(30) & 0xFF
         if key in (10, 13) and selection['point'] is not None:
@@ -524,7 +531,7 @@ def click_channel(screen):
             return selection['point']
         if key == ord('q'):
             cv2.destroyWindow(window_name)
-            raise KeyboardInterrupt("Channel selection canceled.")
+            raise KeyboardInterrupt("Selection canceled.")
 
 
 def keyboard_drive(configuration, camera, pressed):
@@ -588,14 +595,6 @@ def move_to_point(configuration, camera, point, what, debug_dir=None):
     return pressed
 
 
-def choose_channel(configuration, camera, calibration_dir, screen):
-    """Click the channel on the captured TV Plus screen; the camera walks the focus there."""
-    point = click_channel(screen)
-    pressed = move_to_point(configuration, camera, point, "the Live TV channel",
-                            os.path.join(calibration_dir, "nav_channel"))
-    return pressed, point
-
-
 def wait_until_playing(camera, message):
     print(f"[SETUP] {message} Press ENTER in the camera window when it is playing.")
     for _ in range(50):
@@ -634,29 +633,52 @@ def measure_playing_motion(camera, roi, seconds=2.0):
     return float(np.median(values)) if values else 0.0
 
 
-def enter_live_channel(configuration, camera, calibration_dir, context):
-    """TV Plus is opening: capture it, choose (or reuse) the channel, enter it, and calibrate motion."""
-    manufacturer = configuration['manufacturer']
-    screen = capture_tvplus_screen(configuration, camera, calibration_dir, context)
-    reuse = False
-    if configuration['channel_point']:
-        preview = screen.copy()
-        cv2.drawMarker(preview, tuple(configuration['channel_point']), (0, 255, 255), cv2.MARKER_CROSS, 30, 3)
-        cv2.imshow("Saved channel", draw_overlay(preview, [("Saved channel", (0, 255, 255), 1.0)]))
-        cv2.waitKey(1)
-        print(f"[SETUP] Saved channel route: {', '.join(configuration['channel_route']) or '(no move)'} + OK")
-        reuse = input("Use the saved channel? (Y/n): ").strip().lower() in ('', 'y', 'yes')
-        cv2.destroyWindow("Saved channel")
-    if reuse:
-        replay_route(configuration['channel_route'], manufacturer, camera)
-        channel_route = configuration['channel_route']
-    else:
-        channel_route, point = choose_channel(configuration, camera, calibration_dir, screen)
-        configuration['channel_route'] = channel_route
-        configuration['channel_point'] = [int(point[0]), int(point[1])]
-    send_key('OK', manufacturer)
+def run_preconditions(configuration, camera, calibration_dir):
+    """Click through the precondition screens the user asked for, each followed by OK.
 
-    frame = wait_until_playing(camera, "Entering the Live TV channel.")
+    Step 1 is Samsung TV Plus on Home (PACE_01 mapping). Every later step: the new screen is captured,
+    the user clicks where to go, the camera walks the focus there (arrow keys to finish), then OK.
+    A saved spot is pre-marked; keeping it replays the saved keys.
+    """
+    manufacturer = configuration['manufacturer']
+    count = configuration['precondition_steps']
+    saved_steps = configuration['steps']
+    print(f"\n[SETUP] {count} precondition step(s) before Ch Up.")
+
+    # Step 1: Home -> Samsung TV Plus
+    route = calibrate_route(configuration, camera)
+    replay_route(route, manufacturer, camera)
+    context = {'previous_screen': capture_home_ready(camera)}
+    send_key('OK', manufacturer)
+    steps = [{'route': route, 'point': configuration['target_point']}]
+
+    for index in range(1, count):
+        step_no = index + 1
+        screen = capture_next_screen(configuration, camera, calibration_dir, context, step_no,
+                                     allow_home_reclick=(index == 1))
+        if index == 1:
+            steps[0] = {'route': configuration['route'], 'point': configuration['target_point']}
+        saved = saved_steps[index] if index < len(saved_steps) else None
+        saved_point = saved['point'] if saved and saved.get('point') else None
+        point = click_on_screen(screen, step_no, saved_point)
+        if saved_point and tuple(point) == tuple(saved_point):
+            keys = saved['route']
+            print(f"[SETUP] Step {step_no}: using the saved keys {', '.join(keys) or '(no move)'}")
+            replay_route(keys, manufacturer, camera)
+        else:
+            keys = move_to_point(configuration, camera, point, f"the step {step_no} target",
+                                 os.path.join(calibration_dir, f"nav_step{step_no}"))
+        context['previous_screen'] = capture_home_ready(camera)
+        send_key('OK', manufacturer)
+        steps.append({'route': keys, 'point': [int(point[0]), int(point[1])]})
+
+    configuration['steps'] = steps
+    save_configuration(CONFIG_FILE, configuration)
+
+
+def calibrate_playback(configuration, camera, calibration_dir):
+    """After the last precondition step the channel plays; measure its motion for the zap detection."""
+    frame = wait_until_playing(camera, "Waiting for the channel to play.")
     roi = auto_stream_roi(frame.shape)
     playing = measure_playing_motion(camera, roi)
     threshold = max(MIN_MOTION_THRESHOLD, playing * MOTION_THRESHOLD_RATIO)
@@ -880,13 +902,8 @@ def main():
         )
         os.makedirs(calibration_dir, exist_ok=True)
 
-        # Input 1: where Samsung TV Plus is on Home.
-        route = calibrate_route(configuration, camera)
-        replay_route(route, configuration['manufacturer'], camera)
-        context = {'home_ready': capture_home_ready(camera)}
-        send_key('OK', configuration['manufacturer'])
-        # Input 2: which Live TV channel to enter inside TV Plus.
-        roi, motion_threshold = enter_live_channel(configuration, camera, calibration_dir, context)
+        run_preconditions(configuration, camera, calibration_dir)
+        roi, motion_threshold = calibrate_playback(configuration, camera, calibration_dir)
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
