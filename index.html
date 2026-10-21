@@ -95,6 +95,14 @@
   .badge.FAIL { color: var(--fail); background: var(--fail-bg); }
   .badge.INVALID { color: var(--warn); background: var(--warn-bg); }
   .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .rec { display: flex; gap: 4px; }
+  .rec .btn { padding: 3px 8px; font-size: 11px; }
+  dialog#player { border: 1px solid var(--line); border-radius: 10px; padding: 0; background: var(--panel); color: var(--text);
+                  width: min(860px, calc(100vw - 32px)); }
+  dialog#player::backdrop { background: rgb(0 0 0 / .5); }
+  .player-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 14px; }
+  .player-head h2 { font: 600 18px/1.2 var(--font-display); margin: 0; }
+  dialog#player video { display: block; width: 100%; height: auto; background: #000; }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pass); margin-right: 6px; }
   .filters input[type="date"] { font: 13px var(--font-body); padding: 5px 8px; border: 1px solid var(--line);
            border-radius: 6px; background: var(--panel); color: var(--text); text-transform: none; letter-spacing: 0; }
@@ -176,13 +184,21 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b7</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b8</p>
 </div>
+
+<dialog id="player">
+  <div class="player-head">
+    <h2 id="player-title">Run recording</h2>
+    <div class="rec" id="player-links"></div>
+  </div>
+  <video id="player-video" controls playsinline muted></video>
+</dialog>
 
 <script>
 const REFRESH_MS = 30000;
 const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
-const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At'];
+const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
@@ -521,13 +537,38 @@ function renderBuilds(statRows, metric) {
   }).join('');
 }
 
+// Recording links: Play opens the MP4 in a dialog; MP4 and GIF download the files.
+function recordingCell(r) {
+  if (!r.Video && !r.GIF) return '<span class="muted">–</span>';
+  const name = `${state.tc}_run${r.Run}_${r.Timestamp}`;
+  return '<div class="rec">' +
+    (r.Video ? `<button class="btn" data-play="${esc(r.Video)}" data-title="Run ${esc(r.Run)} · ${esc(r.Timestamp)}" data-gif="${esc(r.GIF || '')}" data-name="${esc(name)}">▶ Play</button>` +
+               `<a class="btn" href="${esc(r.Video)}" download="${esc(name)}.mp4">MP4</a>` : '') +
+    (r.GIF ? `<a class="btn" href="${esc(r.GIF)}" download="${esc(name)}.gif">GIF</a>` : '') + '</div>';
+}
+
+function openPlayer(button) {
+  const dialog = document.getElementById('player');
+  const video = document.getElementById('player-video');
+  document.getElementById('player-title').textContent = button.dataset.title;
+  document.getElementById('player-links').innerHTML =
+    `<a class="btn" href="${esc(button.dataset.play)}" download="${esc(button.dataset.name)}.mp4">Download MP4</a>` +
+    (button.dataset.gif ? `<a class="btn" href="${esc(button.dataset.gif)}" download="${esc(button.dataset.name)}.gif">Download GIF</a>` : '') +
+    '<button class="btn" id="player-close">Close</button>';
+  document.getElementById('player-close').onclick = () => dialog.close();
+  video.src = button.dataset.play;
+  dialog.showModal();
+  video.play().catch(() => {});
+}
+
 function renderTable(rows, metric, outliers, excludedCount) {
   const table = document.getElementById('table');
   document.getElementById('row-count').textContent = `(${rows.length} shown · ${excludedCount} excluded)`;
   if (!rows.length) { table.innerHTML = '<tr><td class="empty">No runs in this range</td></tr>'; return; }
 
-  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Session', 'SoC', 'SWV', 'LGCV', 'Manufacturer'];
+  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Recording', 'Session', 'SoC', 'SWV', 'LGCV', 'Manufacturer'];
   const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k));
+  if (rows.some(r => r.Video || r.GIF)) keys.push('Recording');
   const columns = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
   const head = '<tr>' + columns.map(c => `<th>${esc(c)}</th>`).join('') + (state.adminKey ? '<th>Action</th>' : '') + '</tr>';
   const ordered = rows.slice().reverse();
@@ -542,6 +583,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
           (excluded ? '<span class="chip excl">Excluded</span>' : outliers.has(r) ? '<span class="chip">Outlier?</span>' : '') + '</td>';
       }
       if (c === 'Exclude_Reason') return `<td>${esc(r[c])}</td>`;
+      if (c === 'Recording') return `<td>${recordingCell(r)}</td>`;
       const n = num(r[c]);
       if (c === metric) return `<td class="num metric"><b>${fmt(n, 2)}</b></td>`;
       return n != null && !['Timestamp', 'SWV', 'LGCV', 'Session'].includes(c)
@@ -550,6 +592,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
     return `<tr class="${isNew ? 'new' : ''} ${excluded ? 'excluded' : ''}">${cells}${state.adminKey ? actionCell(r, index) : ''}</tr>`;
   }).join('');
   table.innerHTML = head + body;
+  table.querySelectorAll('[data-play]').forEach(button => button.onclick = () => openPlayer(button));
 
   table.querySelectorAll('[data-act]').forEach(button => button.onclick = () => {
     const r = ordered[Number(button.dataset.index)];
@@ -609,6 +652,7 @@ const demoServer = (() => {
   };
 })();
 
+document.getElementById('player').addEventListener('close', () => { const v = document.getElementById('player-video'); v.pause(); v.removeAttribute('src'); v.load(); });
 setupStaticFilters();
 try { state.adminKey = localStorage.getItem(KEY_STORAGE); } catch (e) {}
 renderAdmin();
