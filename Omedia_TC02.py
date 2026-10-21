@@ -343,14 +343,15 @@ def select_app_route(camera, saved_point=None):
         elif route:
             lines = [(f"{APP_NAME} selected: {', '.join(route)} + OK.  ENTER = go", (0, 255, 0), 1.0)]
         else:
-            lines = [(f"Click the {APP_NAME} card or its app icon", (0, 0, 255), 1.0)]
+            lines = [("Not the PACE card/icon spot:  ENTER = go there with the camera", (0, 200, 255), 1.0)]
         if selection['point'] is not None:
-            cv2.circle(preview, selection['point'], 12, (0, 255, 0) if route else (0, 0, 255), 3)
+            cv2.circle(preview, selection['point'], 12, (0, 255, 0) if route else (0, 200, 255), 3)
         cv2.imshow(window_name, draw_overlay(preview, lines))
         key = cv2.waitKey(30) & 0xFF
-        if key in (10, 13) and route:
+        if key in (10, 13) and selection['point'] is not None:
             cv2.destroyWindow(window_name)
-            print(f"[SETUP] Route to {APP_NAME}: {', '.join(route)} + OK")
+            if route:
+                print(f"[SETUP] Route to {APP_NAME}: {', '.join(route)} + OK")
             return route, selection['point']
         if key == ord('q'):
             cv2.destroyWindow(window_name)
@@ -378,11 +379,19 @@ def replay_route(route, manufacturer, camera):
             cv2.waitKey(1)
 
 
-def calibrate_route(configuration, camera):
-    """Home first, then the user clicks Samsung TV Plus; the click decides the D-pad route."""
-    press_home(configuration['manufacturer'], camera)
+def calibrate_route(configuration, camera, nav_dir=None):
+    """Home first, then the user clicks Samsung TV Plus and the focus is moved there (ends focused).
+
+    A click on the PACE_01 card/icon spot uses its route; anywhere else the camera walks the focus there.
+    """
+    manufacturer = configuration['manufacturer']
+    press_home(manufacturer, camera)
     saved_point = configuration['target_point'] or None
     route, point = select_app_route(camera, saved_point)
+    if route:
+        replay_route(route, manufacturer, camera)
+    else:
+        route = move_to_point(configuration, camera, point, APP_NAME, nav_dir)
     configuration['route'] = route
     configuration['target_point'] = [int(point[0]), int(point[1])]
     save_configuration(CONFIG_FILE, configuration)
@@ -430,15 +439,19 @@ def grab_still(camera, label=None):
 
 
 def open_clicked_live_tv(configuration, camera, point, frame_shape, context):
-    """Home stayed on screen: open the TV Plus card/icon the user clicked on that view (PACE_01 mapping)."""
-    route = route_for_click(point, frame_shape)
-    if route is None:
-        print(f"[SETUP] Click the {APP_NAME} card or its bottom app icon.")
-        return
+    """Home stayed on screen: go to the spot the user clicked on that view and press OK.
+
+    The PACE_01 card/icon spot uses its route; anywhere else the camera walks the focus there.
+    """
     manufacturer = configuration['manufacturer']
-    print(f"[SETUP] Opening {APP_NAME}: Home -> {', '.join(route)} -> OK")
+    route = route_for_click(point, frame_shape)
     press_home(manufacturer, camera)
-    replay_route(route, manufacturer, camera)
+    if route:
+        print(f"[SETUP] Opening {APP_NAME}: Home -> {', '.join(route)} -> OK")
+        replay_route(route, manufacturer, camera)
+    else:
+        print("[SETUP] Going to the clicked spot with the camera, then OK.")
+        route = move_to_point(configuration, camera, point, APP_NAME, context.get('nav_dir'))
     context['previous_screen'] = capture_home_ready(camera)
     configuration['route'] = route
     configuration['target_point'] = [int(point[0]), int(point[1])]
@@ -646,9 +659,9 @@ def run_preconditions(configuration, camera, calibration_dir):
     print(f"\n[SETUP] {count} precondition step(s) before Ch Up.")
 
     # Step 1: Home -> Samsung TV Plus
-    route = calibrate_route(configuration, camera)
-    replay_route(route, manufacturer, camera)
-    context = {'previous_screen': capture_home_ready(camera)}
+    route = calibrate_route(configuration, camera, os.path.join(calibration_dir, "nav_step1"))   # ends focused
+    context = {'previous_screen': capture_home_ready(camera),
+               'nav_dir': os.path.join(calibration_dir, "nav_step1_retry")}
     send_key('OK', manufacturer)
     steps = [{'route': route, 'point': configuration['target_point']}]
 
