@@ -11,6 +11,18 @@ import keyboard
 import asyncio
 from kasa import SmartPlug
 import sys
+from config_store import load_saved_configuration, save_configuration
+
+CONFIG_FILE = "LGC_TC1_RegularBoot_config.json"
+DEFAULT_CONFIGURATION = {
+    'ip': '192.168.5.3',
+    'port': 'COM10',
+    'SoC': 'K25Lp',
+    'SWV': '33.30.98',
+    'LGCV': '4.0.18-2',
+    'num_runs': 5,
+    'timeout': 20.0,
+}
 
 # ===== Configuration Input =====
 def get_user_configuration():
@@ -20,12 +32,14 @@ def get_user_configuration():
     print("\n" + "="*60)
     print("  LG TV Cold Boot Performance Test - Configuration")
     print("="*60 + "\n")
+
+    defaults = load_saved_configuration(CONFIG_FILE, DEFAULT_CONFIGURATION)
     
     # Device IP
     while True:
-        ip = input("Enter Device IP Address (default: 192.168.5.3): ").strip()
+        ip = input(f"Enter Device IP Address (default: {defaults['ip']}): ").strip()
         if not ip:
-            ip = "192.168.5.3"
+            ip = defaults['ip']
             break
         if len(ip.split('.')) == 4:
             break
@@ -33,27 +47,27 @@ def get_user_configuration():
     
     # Serial Port
     while True:
-        port = input("Enter Serial Port (default: COMX): ").strip()
+        port = input(f"Enter Serial Port (default: {defaults['port']}): ").strip()
         if not port:
-            port = "COM10"
+            port = defaults['port']
             break
         if port.upper().startswith("COM"):
             break
         print("❌ Invalid port format. Use format like COM4.")
     
     # SoC
-    SoC = input("Enter SoC Model (default: K25Lp): ").strip() or "K25Lp"
+    SoC = input(f"Enter SoC Model (default: {defaults['SoC']}): ").strip() or defaults['SoC']
     
     # Software Version
-    SWV = input("Enter Software Version (default: 33.30.98): ").strip() or "33.30.98"
+    SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4.0.18-2): ").strip() or "4.0.18-2"
+    LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
     
     # Number of runs
     while True:
         try:
-            num_runs = int(input("Enter number of test runs (default: 5): ").strip() or "5")
+            num_runs = int(input(f"Enter number of test runs (default: {defaults['num_runs']}): ").strip() or str(defaults['num_runs']))
             if num_runs > 0:
                 break
             print("❌ Please enter a positive number.")
@@ -63,7 +77,7 @@ def get_user_configuration():
     # Timeout
     while True:
         try:
-            timeout = float(input("Enter timeout for motion detection in seconds (default: 20): ").strip() or "20")
+            timeout = float(input(f"Enter timeout for motion detection in seconds (default: {defaults['timeout']}: ").strip() or str(defaults['timeout']))
             if timeout > 0:
                 break
             print("❌ Please enter a positive number.")
@@ -90,6 +104,7 @@ def get_user_configuration():
     
     confirm = input("Confirm and proceed? (Y/n): ").strip().lower()
     if confirm != 'n':
+        save_configuration(CONFIG_FILE, config)
         return config
     else:
         return get_user_configuration()
@@ -379,9 +394,9 @@ def main():
             wait_with_countdown_noKeyInput(30, "Pre-load Channel")
 
 
-            # Home for 1 min
+            # Home for stabilization window
             send_key(ser, 'Home', 0)
-            wait_with_countdown_noKeyInput(60, "Power Stabilization")
+            wait_with_countdown_noKeyInput(30, "Power Stabilization")
 
 
             # Pre-conditions
@@ -399,7 +414,7 @@ def main():
             # AC Power cycle
             print("\n[AC POWER CYCLE] Starting power cycle...")
             asyncio.run(run_ac_power_cycle(ip, 60))
-            wait_with_countdown_noKeyInput(60, "Power Stabilization")
+            wait_with_countdown_noKeyInput(30, "Power Stabilization")
             
 
             # Navigate to LGC

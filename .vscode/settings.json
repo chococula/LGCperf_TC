@@ -1,3 +1,4 @@
 {
-  "workbench.colorTheme": "Dark+"
+  "workbench.colorTheme": "Dark+",
+  "python.defaultInterpreterPath": "C:\\Users\\usauto1\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
 }

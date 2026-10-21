@@ -4,13 +4,13 @@ import time
 import pandas as pd
 import os
 import json
-import shutil
+import queue
+import threading
 from datetime import datetime
 import winsound
-import keyboard
 import sys
 import subprocess
-from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
+from ir_keys import SAMSUNG_KEYS
 
 # ===== Configuration Input =====
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "PACE_01_Launch_config.json")
@@ -18,7 +18,6 @@ LANDING_REFERENCE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "PACE_01_Launch_landing_reference.jpg"
 )
 DEFAULT_CONFIGURATION = {
-    'manufacturer': 'LG',
     'SoC': 'K25Lp',
     'SWV': '33.30.98',
     'LGCV': '4.0.18-2',
@@ -51,8 +50,6 @@ def load_saved_configuration(config_path=None, default_configuration=None):
         if type(value) is type(default_value):
             config[key] = value
 
-    if config['manufacturer'] not in ('LG', 'Samsung', 'Roku'):
-        config['manufacturer'] = default_configuration['manufacturer']
     if config['num_runs'] <= 0:
         config['num_runs'] = default_configuration['num_runs']
     if config['timeout'] <= 0:
@@ -68,29 +65,6 @@ def save_configuration(config):
         print(f"Could not save configuration: {e}")
 
 
-def select_tv_manufacturer(default_manufacturer):
-    manufacturers = {
-        '1': 'LG',
-        '2': 'Samsung',
-        '3': 'Roku',
-    }
-    default_choice = next(
-        (key for key, value in manufacturers.items() if value == default_manufacturer),
-        '1'
-    )
-
-    print("Select TV manufacturer:")
-    for key, value in manufacturers.items():
-        marker = " (default)" if key == default_choice else ""
-        print(f"  {key}. {value}{marker}")
-
-    while True:
-        choice = input(f"Enter selection [1-3] (default: {default_choice}): ").strip() or default_choice
-        if choice in manufacturers:
-            return manufacturers[choice]
-        print("Invalid selection. Enter 1, 2, or 3.")
-
-
 def get_user_configuration():
     """
     Interactive configuration input from user
@@ -100,7 +74,6 @@ def get_user_configuration():
     print("="*60 + "\n")
 
     defaults = load_saved_configuration()
-    manufacturer = select_tv_manufacturer(defaults['manufacturer'])
 
     # SoC
     SoC = input(f"Enter SoC or Model (default: {defaults['SoC']}): ").strip() or defaults['SoC']
@@ -133,7 +106,6 @@ def get_user_configuration():
             print("❌ Please enter a valid number.")
 
     config = {
-        'manufacturer': manufacturer,
         'SoC': SoC,
         'SWV': SWV,
         'LGCV': LGCV,
@@ -158,26 +130,18 @@ def get_user_configuration():
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
 RAW_IR_KEYSETS = {
-    'LG': LG_KEYS,
     'Samsung': SAMSUNG_KEYS,
-    'Roku': ROKU_KEYS,
 }
 RAW_IR_KEY_ALIASES = {
-    'DpadUp': 'Up',
     'DpadDn': 'Down',
-    'DpadLt': 'Left',
-    'DpadRt': 'Right',
 }
 
 # ===== Measurement Thresholds =====
-GRAY_THRESHOLD = 150
-MOTION_THRESHOLD = 150
-STABLE_FRAMES = 5
 LANDING_TEMPLATE_THRESHOLD = 0.95
 LANDING_STABLE_COUNT = 5
 
 # ===== Helper Functions =====
-def send_key(key_name, delay=2, manufacturer='LG'):
+def send_key(key_name, delay, manufacturer):
     """Send a key using the selected TV manufacturer's IR source."""
     if manufacturer not in RAW_IR_KEYSETS:
         raise ValueError(f"Unsupported TV manufacturer: {manufacturer}")
@@ -188,6 +152,8 @@ def send_key(key_name, delay=2, manufacturer='LG'):
 
     print(f"[ACTION] Sending key '{key_name}' via {manufacturer} IR source...")
     action_started_at = time.perf_counter()
+    if raw_key_name == 'OK':
+        play_beep_async(900, 120)
     subprocess.run(
         [FLIRC_UTIL_PATH, 'sendir', f"--csv={keyset[raw_key_name]}", '--repeat=1'],
         check=True,
@@ -198,25 +164,29 @@ def send_key(key_name, delay=2, manufacturer='LG'):
     return action_started_at
 
 
-def wait_with_countdown_noKeyInput(seconds, description="Timer", cap=None, recorder=None):
+def play_beep_async(frequency_hz, duration_ms):
+    threading.Thread(
+        target=winsound.Beep,
+        args=(frequency_hz, duration_ms),
+        daemon=True,
+    ).start()
+
+
+def wait_with_countdown_noKeyInput(seconds, description="Timer", cap=None):
     """
     Countdown timer without key input requirement
     """
-    winsound.Beep(1000, 200)
     print(f"\n[WAIT] {description}: {seconds} seconds")
 
     for remaining in range(seconds, 0, -1):
         print(f"  ⏱ {remaining} seconds remaining ({description})...", end="\r")
         interval_end = time.perf_counter() + 1
         while time.perf_counter() < interval_end:
-            if recorder is not None:
-                recorder.pump()
-            elif cap is not None:
+            if cap is not None:
                 cap.grab()
             time.sleep(0.01)
 
     print(" " * 80, end="\r")
-    winsound.Beep(1500, 300)
     print(f"[WAIT] ✓ {description} Complete!\n")
 
 
@@ -230,102 +200,82 @@ def initialize_camera(camera_index=0):
     return cap
 
 
+class CameraFrameCapture:
+    """Continuously capture timestamped frames while an app launch is in progress."""
+
+    def __init__(self, cap, max_queue_size=120):
+        self.cap = cap
+        self.frames = queue.Queue(maxsize=max_queue_size)
+        self.stop_event = threading.Event()
+        self.started_event = threading.Event()
+        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+
+    def _capture_loop(self):
+        self.started_event.set()
+        while not self.stop_event.is_set():
+            capture_started_at = time.perf_counter()
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+
+            try:
+                self.frames.put_nowait((capture_started_at, frame))
+            except queue.Full:
+                try:
+                    self.frames.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.frames.put_nowait((capture_started_at, frame))
+                except queue.Full:
+                    pass
+
+    def start(self):
+        self.thread.start()
+        if not self.started_event.wait(timeout=1.0):
+            raise RuntimeError("Camera capture worker did not start.")
+
+    def clear_buffer(self):
+        cleared = 0
+        while True:
+            try:
+                self.frames.get_nowait()
+                cleared += 1
+            except queue.Empty:
+                break
+        print(f"[CAMERA] Cleared {cleared} pre-launch captured frame(s).")
+
+    def get_frame(self, timeout=0.05):
+        try:
+            return self.frames.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def stop(self):
+        self.stop_event.set()
+        self.thread.join(timeout=1.0)
+
+
 def lock_camera_focus(cap):
     """Disable autofocus after the user confirms a sharp camera preview."""
     accepted = cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
     autofocus_mode = cap.get(cv2.CAP_PROP_AUTOFOCUS)
     if not accepted or autofocus_mode == 1:
         print(f"[CAMERA] Could not confirm autofocus lock (reported mode: {autofocus_mode}).")
-        return False
+        return
 
     print(f"[CAMERA] Autofocus disabled; focus locked (reported mode: {autofocus_mode}).")
-    return True
 
 
-class CycleFrameRecorder:
-    def __init__(self, cap, dir_path, interval_seconds=0.25):
-        self.cap = cap
-        self.dir_path = dir_path
-        self.interval_seconds = interval_seconds
-        self.frame_count = 0
-        self.last_frame_time = None
-
-    def record_frame(self, frame, force=False):
-        now = time.perf_counter()
-        if not force and self.last_frame_time is not None:
-            if now - self.last_frame_time < self.interval_seconds:
-                return False
-
-        next_frame = self.frame_count + 1
-        frame_path = os.path.join(self.dir_path, f"cycle_frame_{next_frame:05d}.jpg")
-        if not cv2.imwrite(frame_path, frame):
-            return False
-        self.frame_count = next_frame
-        self.last_frame_time = now
-        return True
-
-    def capture(self, force=False):
-        ret, frame = self.cap.read()
-        return self.record_frame(frame, force) if ret else False
-
-    def pump(self):
-        now = time.perf_counter()
-        if self.last_frame_time is None or now - self.last_frame_time >= self.interval_seconds:
-            self.capture(force=True)
-        else:
-            self.cap.grab()
-
-
-def create_cycle_gif(dir_path, frame_count):
-    """Create a looping GIF from the images captured during one complete cycle."""
-    if frame_count == 0:
-        print("[GIF] No cycle frames were captured; skipping GIF generation.")
-        return None
-
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path is None:
-        try:
-            import imageio_ffmpeg
-            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-        except ImportError:
-            print("[GIF] ffmpeg unavailable. Install project requirements to enable cycle GIFs.")
-            return None
-
-    frame_pattern = os.path.join(dir_path, "cycle_frame_%05d.jpg")
-    gif_path = os.path.join(dir_path, "cycle.gif")
-    command = [
-        ffmpeg_path,
-        "-hide_banner", "-loglevel", "error", "-y",
-        "-framerate", "4", "-start_number", "1", "-i", frame_pattern,
-        "-filter_complex",
-        "[0:v]scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
-        "-loop", "0", gif_path,
-    ]
-
-    try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-    except (OSError, subprocess.CalledProcessError) as error:
-        print(f"[GIF] Failed to create cycle GIF: {error}")
-        return None
-
-    print(f"[GIF] Cycle animation saved: {gif_path}")
-    return gif_path
-
-
-def flush_camera_buffer(cap, max_duration=1.0, max_frames=120, recorder=None):
+def flush_camera_buffer(cap, max_duration=1.0, max_frames=120):
     """Discard queued frames so the next read reflects the current TV screen."""
     start_time = time.perf_counter()
     flushed_frames = 0
     while flushed_frames < max_frames and time.perf_counter() - start_time < max_duration:
-        if recorder is not None:
-            recorder.pump()
-            flushed_frames += 1
-            continue
         if not cap.grab():
             break
         flushed_frames += 1
     print(f"[CAMERA] Flushed {flushed_frames} queued frame(s) before launch.")
-    return flushed_frames
 
 
 def position_camera(cap):
@@ -408,12 +358,21 @@ def select_tv_plus_navigation(cap):
             raise RuntimeError("TV Plus selection canceled.")
 
 
-def launch_selected_app(cap, manufacturer, navigation, recorder=None):
+def launch_selected_app(cap, manufacturer, navigation, capture_from_launch=False):
     """Send the app navigation, flush stale frames, and trigger OK without a post-key delay."""
     for key_name in navigation:
         if key_name == 'OK':
-            flush_camera_buffer(cap, recorder=recorder)
-            return send_key(key_name, 0, manufacturer)
+            flush_camera_buffer(cap)
+            frame_capture = None
+            if capture_from_launch:
+                frame_capture = CameraFrameCapture(cap)
+                frame_capture.start()
+                frame_capture.clear_buffer()
+
+            launch_started_at = send_key(key_name, 0, manufacturer)
+            if frame_capture is not None:
+                return launch_started_at, frame_capture
+            return launch_started_at
         send_key(key_name, 1, manufacturer)
     raise ValueError("App navigation must end with an OK key.")
 
@@ -509,8 +468,8 @@ def review_saved_landing_reference():
     return None
 
 
-def measure_landing_time(cap, run_idx, dir_path, timeout, config, reference_gray, launch_started_at,
-                         recorder=None):
+def measure_landing_time(frame_capture, run_idx, dir_path, timeout, reference_gray,
+                         launch_started_at):
     """
     Measure landing time by comparing live frames against a pre-confirmed landing page reference.
     The run finishes only when the screen remains above the similarity threshold for several frames.
@@ -523,27 +482,28 @@ def measure_landing_time(cap, run_idx, dir_path, timeout, config, reference_gray
     elapsed_ms = 0.0
     threshold_crossing_ms = None
     start_time = launch_started_at
-    last_frame = None
 
     print(f"[RUN {run_idx}] Monitoring for landing screen match...")
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            print(f"❌ Frame read failed.")
-            break
+        captured_frame = frame_capture.get_frame(timeout=0.05)
+        if captured_frame is None:
+            if time.perf_counter() - start_time > timeout:
+                print(f"❌ [RUN {run_idx}] Timeout: No landing match in {timeout} seconds")
+                break
+            continue
 
-        if recorder is not None:
-            recorder.record_frame(frame)
+        capture_started_at, frame = captured_frame
+        if capture_started_at < start_time:
+            continue
 
         frame_count += 1
-        last_frame = frame
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         curr_gray_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
 
         score_map = cv2.matchTemplate(curr_gray_blur, reference_gray, cv2.TM_CCOEFF_NORMED)
         best_score = float(np.max(score_map))
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        elapsed_ms = (capture_started_at - start_time) * 1000.0
 
         top_text = f"Time: {elapsed_ms:.2f}ms | Similarity: {best_score:.4f} | Frame: {frame_count}"
         cv2.putText(curr_gray, top_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,), 1)
@@ -565,23 +525,20 @@ def measure_landing_time(cap, run_idx, dir_path, timeout, config, reference_gray
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,), 2)
             cv2.imwrite(os.path.join(dir_path, "RESULT_LANDING.jpg"), curr_gray)
             print(f"✓ [RUN {run_idx}] Landing confirmed! Threshold-crossing time: {threshold_crossing_ms:.2f}ms | Similarity: {best_score:.4f}")
-            winsound.Beep(1500, 250)
-            winsound.Beep(2500, 350)
+            play_beep_async(2200, 250)
             break
 
-        if (time.perf_counter() - start_time) > timeout:
+        if (capture_started_at - start_time) > timeout:
             print(f"❌ [RUN {run_idx}] Timeout: No landing match in {timeout} seconds")
             break
 
         cv2.imshow('Landing Detection', curr_gray)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("User exit requested.")
-            cap.release()
+            frame_capture.stop()
+            frame_capture.cap.release()
             cv2.destroyAllWindows()
             sys.exit(0)
-
-    if recorder is not None and last_frame is not None:
-        recorder.record_frame(last_frame, force=True)
 
     return {
         'run': run_idx,
@@ -608,7 +565,7 @@ def main():
     SoC = config['SoC']
     SWV = config['SWV']
     LGCV = config['LGCV']
-    manufacturer = config['manufacturer']
+    manufacturer = 'Samsung'
     num_runs = config['num_runs']
     timeout = config['timeout']
 
@@ -661,30 +618,33 @@ def main():
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")
-        recorder = CycleFrameRecorder(cap, dir_path)
-        recorder.capture(force=True)
 
         try:
             print(f"\n[STATUS] Run {run_idx}/{num_runs}: preparing {manufacturer} home screen")
             print("[STEP] Turning TV OFF with the remote Power button...")
             send_key('Power', 0, manufacturer)
-            wait_with_countdown_noKeyInput(30, "TV Power OFF", recorder=recorder)
+            wait_with_countdown_noKeyInput(30, "TV Power OFF", cap)
 
             print("[STEP] Turning TV ON with the remote Power button...")
             send_key('Power', 0, manufacturer)
-            wait_with_countdown_noKeyInput(5, "TV Power ON Stabilization", recorder=recorder)
+            wait_with_countdown_noKeyInput(5, "TV Power ON Stabilization", cap)
 
             print("[STEP] Sending Home...")
             send_key('Home', 0, manufacturer)
-            wait_with_countdown_noKeyInput(5, "Home Screen Stabilization", recorder=recorder)
+            wait_with_countdown_noKeyInput(5, "Home Screen Stabilization", cap)
 
             print(f"[STEP] Launching app sequence for run {run_idx}...")
-            launch_started_at = launch_selected_app(cap, manufacturer, launch_navigation, recorder)
+            launch_started_at, frame_capture = launch_selected_app(
+                cap, manufacturer, launch_navigation, capture_from_launch=True
+            )
 
             print(f"[LAUNCH] Landing detection started for run {run_idx}...")
-            result = measure_landing_time(
-                cap, run_idx, dir_path, timeout, config, reference_gray, launch_started_at, recorder
-            )
+            try:
+                result = measure_landing_time(
+                    frame_capture, run_idx, dir_path, timeout, reference_gray, launch_started_at
+                )
+            finally:
+                frame_capture.stop()
 
             if result:
                 results.append(result)
@@ -704,10 +664,8 @@ def main():
         except Exception as e:
             print(f"❌ Error in run {run_idx}: {e}")
 
-        create_cycle_gif(dir_path, recorder.frame_count)
-
         if run_idx < num_runs:
-            wait_with_countdown_noKeyInput(10, "Interval between runs", recorder=recorder)
+            wait_with_countdown_noKeyInput(10, "Interval between runs", cap)
 
     print(f"\n{'='*60}")
     print(f"  Test Complete - Summary")

@@ -11,6 +11,18 @@ import keyboard
 import asyncio
 from kasa import SmartPlug
 import sys
+from config_store import load_saved_configuration, save_configuration
+
+CONFIG_FILE = "LGC_TC2_ColdBoot_config.json"
+DEFAULT_CONFIGURATION = {
+    'ip': '192.168.5.3',
+    'port': 'COM10',
+    'SoC': 'K25Lp',
+    'SWV': '33.30.98',
+    'LGCV': '4.0.18-2',
+    'num_runs': 5,
+    'timeout': 20.0,
+}
 
 # ===== Configuration Input =====
 def get_user_configuration():
@@ -90,6 +102,7 @@ def get_user_configuration():
     
     confirm = input("Confirm and proceed? (Y/n): ").strip().lower()
     if confirm != 'n':
+        save_configuration(CONFIG_FILE, config)
         return config
     else:
         return get_user_configuration()
