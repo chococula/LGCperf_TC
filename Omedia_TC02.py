@@ -1,13 +1,14 @@
-"""Omedia_TC02 - Samsung TV Plus launch time.
+"""Omedia_TC02 - Samsung TV Plus live stream start time.
 
-Setup (same as PACE_01):
+Setup:
   1. Home is shown; click the Samsung TV Plus card (route: Down) or its bottom app icon
-     (route: Down, Down).
-  2. TV Plus is launched once to capture the "fully loaded" landing reference (reused afterwards).
+     (route: Down, Down), as in PACE_01.
+  2. TV Plus is launched once; when live TV is playing, drag a box around the live video area.
+     Its playing motion sets the "streaming" threshold (area and threshold are reused afterwards).
 Each run:
-  Power cycle (optional) -> Home -> route -> record 2 s of pre-roll -> OK starts the timer ->
-  stop when the landing similarity reaches the threshold. Frames, MP4/GIF, CSV row, and upload
-  are the same as Omedia_TC01.
+  Power cycle (optional) -> Home -> route -> check Home with TV Plus focused (2 s pre-roll) ->
+  OK starts the timer -> stop at the first frame of sustained motion in the live video area.
+  Frames, MP4/GIF, CSV row (Stream_Start_ms), and upload are the same as Omedia_TC01.
 """
 import cv2
 import numpy as np
@@ -29,7 +30,6 @@ from run_video import make_run_videos
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_config.json")
-LANDING_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_landing_reference.jpg")
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'Samsung',
     'SoC': 'U8000',
@@ -37,10 +37,11 @@ DEFAULT_CONFIGURATION = {
     'LGCV': '8.2.008',
     'num_runs': 5,
     'timeout': 30.0,
-    'landing_similarity_threshold': 0.7,
     'standby_seconds': 30,
     'route': [],
     'target_point': [],
+    'stream_roi': [],
+    'motion_threshold': 0.0,
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
@@ -52,7 +53,12 @@ RAW_IR_KEYSETS = {
 APP_NAME = "Samsung TV Plus"
 CAMERA_INDEX = 1
 CAPTURE_WINDOW = "Omedia_TC02 Capture"
-FRAME_CAPTURE_SIMILARITY = 0.85
+HOME_READY_SIMILARITY = 0.6     # pre-check: Home with TV Plus focused must still match this well
+MIN_MOTION_THRESHOLD = 2.0      # mean gray-level change per frame inside the live video area
+MOTION_THRESHOLD_RATIO = 0.4    # streaming = motion of at least 40% of the measured playing motion
+MIN_STREAM_BRIGHTNESS = 20      # a black screen is not streaming
+STREAM_CONFIRM_FRAMES = 3       # consecutive moving frames needed; the first one is the start time
+STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
 PRE_ROLL_SECONDS = 2.0
 BOOT_WAIT_SECONDS = 20
 HOME_SETTLE_SECONDS = 3
@@ -77,7 +83,7 @@ def ask_number(prompt, default, cast, valid):
 def get_user_configuration():
     defaults = load_saved_configuration(CONFIG_FILE, DEFAULT_CONFIGURATION)
     print("\n" + "=" * 60)
-    print(f"  Omedia_TC02 - {APP_NAME} Launch Time")
+    print(f"  Omedia_TC02 - {APP_NAME} Live Stream Start Time")
     print("=" * 60)
 
     while True:
@@ -91,9 +97,7 @@ def get_user_configuration():
     SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
     num_runs = ask_number("Enter number of runs", defaults['num_runs'], int, lambda v: v > 0)
-    timeout = ask_number("Enter launch timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
-    threshold = ask_number("Enter landing similarity threshold (0-1)",
-                           defaults['landing_similarity_threshold'], float, lambda v: 0 < v <= 1)
+    timeout = ask_number("Enter stream start timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
     standby_seconds = ask_number("Enter TV standby seconds before each run (0 = no power cycle)",
                                  defaults['standby_seconds'], int, lambda v: v >= 0)
 
@@ -105,12 +109,10 @@ def get_user_configuration():
         'LGCV': LGCV,
         'num_runs': num_runs,
         'timeout': timeout,
-        'landing_similarity_threshold': threshold,
         'standby_seconds': standby_seconds,
     })
     print("\nConfiguration:")
-    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout',
-                'landing_similarity_threshold', 'standby_seconds'):
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'standby_seconds'):
         print(f"  {key}: {configuration[key]}")
     if configuration['route']:
         print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
@@ -318,7 +320,7 @@ def screen_similarity(frame, reference):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
-        raise RuntimeError("Camera frame is smaller than the saved landing reference.")
+        raise RuntimeError("Camera frame is smaller than the saved Home reference.")
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
@@ -404,191 +406,243 @@ def calibrate_route(configuration, camera):
     return route
 
 
-# ---------- calibration: landing reference ----------
+# ---------- calibration: where the live TV stream plays ----------
 
-def capture_landing_reference(camera, manufacturer, output_dir):
-    reference_path = os.path.join(output_dir, "landing_reference.jpg")
-    while True:
-        print(f"\n[SETUP] Launching {APP_NAME} once (not measured) to capture its loaded screen.")
-        send_key('OK', manufacturer)
-        print(f"Wait until {APP_NAME} has fully loaded (video/guide showing).")
-        input("Then press Enter to capture it: ")
+def roi_gray(frame, roi):
+    x, y, w, h = roi
+    gray = cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
+    return cv2.GaussianBlur(gray, (5, 5), 0)
 
-        samples = []
-        start_time = time.perf_counter()
-        while time.perf_counter() - start_time < 2.0:
-            ret, frame = camera.read()
-            if ret:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                samples.append(cv2.GaussianBlur(gray, (5, 5), 0))
-            time.sleep(0.05)
-        if not samples:
-            raise RuntimeError("Could not capture the landing reference.")
 
-        reference = np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
-        cv2.imshow("Landing Reference Preview", reference)
+def roi_motion(previous_gray, current_gray):
+    return float(np.mean(cv2.absdiff(previous_gray, current_gray)))
+
+
+def capture_home_ready(camera):
+    """Median gray frame of Home with TV Plus focused, used to check each run starts from there."""
+    samples = []
+    end = time.perf_counter() + 1.0
+    while time.perf_counter() < end or not samples:
+        frame = read_frame(camera)
+        if frame is not None:
+            samples.append(cv2.GaussianBlur(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 0))
+    return np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
+
+
+def select_stream_area(camera):
+    """User drags a box around the live video on the TV Plus screen."""
+    frame = None
+    while frame is None:
+        frame = read_frame(camera)
+    window_name = "Select live video area"
+    print("\n[SETUP] Drag a box around the area where the live TV video plays, then press Enter "
+          "(C = cancel and redo).")
+    preview = draw_overlay(frame.copy(), [("Drag around the LIVE VIDEO area, then ENTER", (0, 255, 0), 1.0)])
+    roi = cv2.selectROI(window_name, preview, showCrosshair=True, fromCenter=False)
+    cv2.destroyWindow(window_name)
+    x, y, w, h = (int(v) for v in roi)
+    if w < 20 or h < 20:
+        return None
+    return [x, y, w, h]
+
+
+def measure_playing_motion(camera, roi, seconds=2.0):
+    """Typical frame-to-frame change inside the area while live TV is playing."""
+    values = []
+    previous = None
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        frame = read_frame(camera)
+        if frame is None:
+            continue
+        current = roi_gray(frame, roi)
+        if previous is not None:
+            values.append(roi_motion(previous, current))
+        previous = current
+        preview = frame.copy()
+        x, y, w, h = roi
+        cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 2)
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(preview, [("Measuring live video motion...", (255, 255, 255), 1.0)]))
         cv2.waitKey(1)
-        approval = input(f"Use this as the {APP_NAME} loaded reference? (Y/n): ").strip().lower()
-        cv2.destroyWindow("Landing Reference Preview")
-        if approval in ('', 'y', 'yes'):
-            for image_path in (reference_path, LANDING_REFERENCE_FILE):
-                if not cv2.imwrite(image_path, reference):
-                    raise RuntimeError(f"Could not save landing reference: {image_path}")
-            print(f"Landing reference saved: {LANDING_REFERENCE_FILE}")
-            return reference
-        print("Reference rejected. Going back to Home to try again.")
-        send_key('Home', manufacturer)
-        time.sleep(HOME_SETTLE_SECONDS)
-        input(f"Make sure {APP_NAME} is focused on the Home screen, then press Enter: ")
+    return float(np.median(values)) if values else 0.0
 
 
-def review_saved_landing_reference():
-    if not os.path.isfile(LANDING_REFERENCE_FILE):
-        print(f"No saved {APP_NAME} landing reference. One will be captured now.")
-        return None
-    reference = cv2.imread(LANDING_REFERENCE_FILE, cv2.IMREAD_GRAYSCALE)
-    if reference is None:
-        print("Saved landing reference could not be read; a new one will be captured.")
-        return None
-    cv2.imshow("Saved Landing Reference", reference)
-    cv2.waitKey(1)
-    reuse = input(f"Reuse this saved {APP_NAME} landing screen? (Y/n): ").strip().lower()
-    cv2.destroyWindow("Saved Landing Reference")
-    if reuse in ('', 'y', 'yes'):
-        print(f"Reusing saved landing reference: {LANDING_REFERENCE_FILE}")
-        return reference
-    print("Saved reference rejected. A new landing screen will be captured.")
-    return None
+def setup_stream_detection(configuration, camera, route):
+    """Ask where live TV plays and how much it moves; reuse the saved area if the user agrees."""
+    manufacturer = configuration['manufacturer']
+    if configuration['stream_roi'] and configuration['motion_threshold'] > 0:
+        x, y, w, h = configuration['stream_roi']
+        print(f"\n[SETUP] Saved live video area: x={x} y={y} w={w} h={h}, "
+              f"motion threshold {configuration['motion_threshold']:.1f}")
+        if input("Reuse the saved live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
+            return configuration['stream_roi'], configuration['motion_threshold']
+
+    while True:
+        print(f"\n[SETUP] Launching {APP_NAME} once (not measured).")
+        send_key('OK', manufacturer)
+        input("When the live TV stream is playing, press Enter: ")
+        roi = select_stream_area(camera)
+        if roi is None:
+            print("[SETUP] The box is too small. Try again.")
+            press_home(manufacturer, camera)
+            replay_route(route, manufacturer, camera)
+            continue
+        playing = measure_playing_motion(camera, roi)
+        threshold = max(MIN_MOTION_THRESHOLD, playing * MOTION_THRESHOLD_RATIO)
+        print(f"[SETUP] Live video motion {playing:.1f}; streaming counts from motion >= {threshold:.1f}")
+        if playing < MIN_MOTION_THRESHOLD:
+            print("[SETUP] The area barely moves. Pick the area where the video itself plays.")
+        if input("Use this live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
+            break
+        press_home(manufacturer, camera)
+        replay_route(route, manufacturer, camera)
+
+    configuration['stream_roi'] = roi
+    configuration['motion_threshold'] = float(threshold)
+    save_configuration(CONFIG_FILE, configuration)
+    press_home(manufacturer, camera)
+    return roi, threshold
 
 
 # ---------- measurement ----------
 
-def check_not_launched(frame_capture, reference, similarity_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
-    """Before OK, confirm TV Plus is not already showing; the frames double as the video pre-roll."""
+def check_home_ready(frame_capture, home_ready, output_dir, seconds=PRE_ROLL_SECONDS):
+    """Before OK, confirm Home with TV Plus focused is showing; the frames double as the video pre-roll."""
     frame_capture.clear_buffer()
-    max_score = None
+    scores = []
     last_frame = None
     pre_frames = []
     end_at = time.perf_counter() + seconds
-    while time.perf_counter() < end_at or max_score is None:
+    while time.perf_counter() < end_at or not scores:
         captured = frame_capture.get_frame(timeout=1.0)
         if captured is None:
             if time.perf_counter() > end_at + 2.0:
                 raise RuntimeError("No camera frames during the pre-launch check.")
             continue
         captured_at, frame = captured
-        score = screen_similarity(frame, reference)
-        max_score = score if max_score is None else max(max_score, score)
+        score = screen_similarity(frame, home_ready)
+        scores.append(score)
         last_frame = frame
         pre_frames.append((captured_at, frame.copy(), score))
 
-    ready = max_score < similarity_threshold
+    score = float(np.median(scores))
+    ready = score >= HOME_READY_SIMILARITY
     last_frame = last_frame.copy()
     draw_overlay(last_frame, [
-        (f"PRE-CHECK  similarity {max_score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
-        ("READY - OK" if ready else f"{APP_NAME} ALREADY SHOWING - RUN INVALID",
+        (f"PRE-CHECK  Home match {score:.3f} / {HOME_READY_SIMILARITY:.3f}", (0, 255, 255), 1.0),
+        ("READY - OK" if ready else f"NOT ON HOME WITH {APP_NAME.upper()} - RUN INVALID",
          (0, 255, 0) if ready else (0, 0, 255), 1.2),
     ])
     cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_OK.jpg"), last_frame)
     cv2.imshow(CAPTURE_WINDOW, last_frame)
     cv2.waitKey(1)
-    return ready, max_score, pre_frames
+    return ready, score, pre_frames
 
 
-def measure_launch_time(frame_capture, reference, run_idx, output_dir, timeout,
-                        similarity_threshold, ok_pressed_at, pre_frames=()):
+def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_dir, timeout,
+                         ok_pressed_at, pre_frames=()):
+    """Time from OK until the live video area shows sustained playback motion."""
+    x, y, w, h = roi
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
     armed = False
+    streak = 0
+    candidate_ms = None
     detected_elapsed_ms = None
+    previous_roi = None
+    stop_at_ms = None
+    result_saved = False
     frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
+
+    def annotate(image, lines):
+        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 255), 2)
+        return draw_overlay(image, lines)
 
     # Pre-roll: the last PRE_ROLL_SECONDS before OK, saved with negative elapsed time for the video.
     pre_index = 0
-    for captured_at, frame, score in pre_frames:
+    for captured_at, frame, _ in pre_frames:
         elapsed_ms = (captured_at - ok_pressed_at) * 1000.0
         if elapsed_ms < -PRE_ROLL_SECONDS * 1000.0 or elapsed_ms >= 0:
             continue
         pre_index += 1
         frame_writer.save(
-            f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
-            draw_overlay(frame, [
-                (f"RUN {run_idx}  BEFORE OK  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4),
-                (f"Similarity {score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
-            ]),
+            f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim0.000.jpg",
+            annotate(frame, [(f"RUN {run_idx}  BEFORE OK  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
         )
 
-    print(f"[RUN {run_idx}] Waiting for {APP_NAME} to load (saving every frame until similarity "
-          f"{FRAME_CAPTURE_SIMILARITY:.2f})...")
+    print(f"[RUN {run_idx}] Waiting for the live stream to start (motion >= {motion_threshold:.1f} "
+          f"for {STREAM_CONFIRM_FRAMES} frames)...")
     try:
         while time.perf_counter() - ok_pressed_at <= timeout:
             captured = frame_capture.get_frame()
             if captured is None:
                 continue
-
             captured_at, frame = captured
             if captured_at < ok_pressed_at:
                 continue
 
             frame_count += 1
-            score = screen_similarity(frame, reference)
             elapsed_ms = (captured_at - ok_pressed_at) * 1000.0
             last_elapsed_ms = elapsed_ms
-            # Only count a match after a frame below the threshold, so a stale frame cannot pass.
-            if score < similarity_threshold:
-                armed = True
-            newly_detected = armed and not detected and score >= similarity_threshold
-            if newly_detected:
-                detected = True
-                detected_elapsed_ms = elapsed_ms
+            current_roi = roi_gray(frame, roi)
+            motion = roi_motion(previous_roi, current_roi) if previous_roi is not None else 0.0
+            brightness = float(np.mean(current_roi))
+            previous_roi = current_roi
 
-            saved_color = (0, 255, 0) if score >= similarity_threshold else (0, 255, 255)
-            saved_overlay = [
-                (f"RUN {run_idx}  #{frame_count}  TIMER {elapsed_ms / 1000.0:.3f} s", saved_color, 1.4),
-                (f"Similarity {score:.3f} / {similarity_threshold:.3f}", saved_color, 1.0),
+            playing = motion >= motion_threshold and brightness >= MIN_STREAM_BRIGHTNESS
+            if not playing:
+                armed = True
+                streak = 0
+            elif armed and not detected:
+                streak += 1
+                if streak == 1:
+                    candidate_ms = elapsed_ms
+                if streak >= STREAM_CONFIRM_FRAMES:
+                    detected = True
+                    detected_elapsed_ms = candidate_ms
+                    stop_at_ms = elapsed_ms + STREAM_EXTRA_SECONDS * 1000.0
+                    print(f"[RUN {run_idx}] Live stream started at {candidate_ms:.2f} ms "
+                          f"(motion {motion:.1f} >= {motion_threshold:.1f}).")
+                    winsound.Beep(1500, 250)
+                    winsound.Beep(2500, 350)
+
+            color = (0, 255, 0) if playing else (0, 255, 255)
+            saved_lines = [
+                (f"RUN {run_idx}  #{frame_count}  TIMER {elapsed_ms / 1000.0:.3f} s", color, 1.4),
+                (f"Motion {motion:.1f} / {motion_threshold:.1f}", color, 1.0),
             ]
             if detected:
-                saved_overlay.append((f"LOADED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+                saved_lines.append((f"LIVE STREAM STARTED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
             frame_writer.save(
-                f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
-                draw_overlay(frame.copy(), saved_overlay),
+                f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{min(motion / motion_threshold, 9.999):.3f}.jpg",
+                annotate(frame.copy(), saved_lines),
             )
 
             shown_ms = detected_elapsed_ms if detected else elapsed_ms
-            status_color = (0, 255, 0) if detected else (0, 255, 255)
-            overlay = [
-                (f"RUN {run_idx}  TIMER {shown_ms / 1000.0:.3f} s", status_color, 1.4),
-                (f"Similarity {score:.3f} / {similarity_threshold:.3f}", status_color, 1.0),
+            live_lines = [
+                (f"RUN {run_idx}  TIMER {shown_ms / 1000.0:.3f} s", (0, 255, 0) if detected else (0, 255, 255), 1.4),
+                (f"Motion {motion:.1f} / {motion_threshold:.1f}", color, 1.0),
             ]
             if detected:
-                overlay.append((f"{APP_NAME.upper()} LOADED", (0, 255, 0), 1.2))
-                overlay.append((f"Saving frames until {FRAME_CAPTURE_SIMILARITY:.2f}...", (255, 255, 255), 0.8))
-            draw_overlay(frame, overlay)
-            cv2.imshow(CAPTURE_WINDOW, frame)
+                live_lines.append(("LIVE STREAM STARTED", (0, 255, 0), 1.2))
+            cv2.imshow(CAPTURE_WINDOW, annotate(frame, live_lines))
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 raise KeyboardInterrupt("Measurement canceled by user.")
-
-            if newly_detected:
-                cv2.imwrite(os.path.join(output_dir, "RESULT_LOADED.jpg"), frame)
-                print(f"[RUN {run_idx}] {APP_NAME} loaded in {elapsed_ms:.2f} ms "
-                      f"(match {score:.3f}, threshold {similarity_threshold:.3f}).")
-                winsound.Beep(1500, 250)
-                winsound.Beep(2500, 350)
-
-            if detected and score >= FRAME_CAPTURE_SIMILARITY:
-                print(f"[RUN {run_idx}] Similarity {score:.3f} reached {FRAME_CAPTURE_SIMILARITY:.2f}; "
-                      f"frame capture stopped at {elapsed_ms:.2f} ms.")
+            if detected and not result_saved:
+                cv2.imwrite(os.path.join(output_dir, "RESULT_STREAM_STARTED.jpg"), frame)
+                result_saved = True
+            if stop_at_ms is not None and elapsed_ms >= stop_at_ms:
                 break
     finally:
         frame_writer.close()
         print(f"[RUN {run_idx}] Saved {frame_writer.saved} frames to {frame_writer.frames_dir}")
 
     if detected:
-        cv2.waitKey(2000)
+        cv2.waitKey(1500)
         last_elapsed_ms = detected_elapsed_ms
     else:
-        print(f"[RUN {run_idx}] {APP_NAME} did not load within {timeout:g} seconds.")
+        print(f"[RUN {run_idx}] The live stream did not start within {timeout:g} seconds.")
         winsound.Beep(400, 700)
 
     return {
@@ -608,9 +662,8 @@ def invalid_result(run_idx, output_dir, reason):
             'directory': output_dir, 'reason': reason}
 
 
-def run_once(configuration, camera, run_idx, output_dir, route, landing_reference):
+def run_once(configuration, camera, run_idx, output_dir, route, home_ready, roi, motion_threshold):
     manufacturer = configuration['manufacturer']
-    threshold = configuration['landing_similarity_threshold']
 
     if configuration['standby_seconds'] > 0:
         print(f"\n[RUN {run_idx}] STEP 1: Power OFF, standby, Power ON.")
@@ -627,16 +680,16 @@ def run_once(configuration, camera, run_idx, output_dir, route, landing_referenc
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
-        ready, precheck_score, pre_frames = check_not_launched(frame_capture, landing_reference, threshold, output_dir)
+        ready, score, pre_frames = check_home_ready(frame_capture, home_ready, output_dir)
         if not ready:
             return invalid_result(run_idx, output_dir,
-                                  f"{APP_NAME} was already showing (similarity {precheck_score:.3f}) before OK.")
+                                  f"Home with {APP_NAME} focused was not showing (match {score:.3f}) before OK.")
         frame_capture.clear_buffer()
         print(f"[RUN {run_idx}] STEP 3: OK launches {APP_NAME}; the timer starts now.")
         ok_pressed_at = send_key('OK', manufacturer)
         winsound.Beep(1500, 300)
-        return measure_launch_time(frame_capture, landing_reference, run_idx, output_dir,
-                                   configuration['timeout'], threshold, ok_pressed_at, pre_frames)
+        return measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_dir,
+                                    configuration['timeout'], ok_pressed_at, pre_frames)
     finally:
         frame_capture.stop()
 
@@ -660,16 +713,12 @@ def main():
         os.makedirs(calibration_dir, exist_ok=True)
 
         route = calibrate_route(configuration, camera)
-        landing_reference = review_saved_landing_reference()
-        if landing_reference is None:
-            press_home(configuration['manufacturer'], camera)
-            replay_route(route, configuration['manufacturer'], camera)
-            landing_reference = capture_landing_reference(camera, configuration['manufacturer'], calibration_dir)
-        else:
-            cv2.imwrite(os.path.join(calibration_dir, "landing_reference.jpg"), landing_reference)
+        replay_route(route, configuration['manufacturer'], camera)
+        home_ready = capture_home_ready(camera)
+        cv2.imwrite(os.path.join(calibration_dir, "home_ready.jpg"), home_ready)
+        roi, motion_threshold = setup_stream_detection(configuration, camera, route)
 
         results = []
-        threshold = configuration['landing_similarity_threshold']
         for run_idx in range(1, configuration['num_runs'] + 1):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_dir = os.path.join(
@@ -680,10 +729,11 @@ def main():
             os.makedirs(output_dir, exist_ok=True)
             print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] {APP_NAME} launch\n{'=' * 60}")
 
-            result = run_once(configuration, camera, run_idx, output_dir, route, landing_reference)
+            result = run_once(configuration, camera, run_idx, output_dir, route, home_ready, roi, motion_threshold)
 
             if result['status'] != 'INVALID':
-                make_run_videos(output_dir, threshold=threshold, run_label=f"RUN {run_idx}")
+                make_run_videos(output_dir, run_label=f"RUN {run_idx}",
+                                end_ms=result['response_time_ms'] if result['status'] == 'PASS' else None)
             # Leave the app so the next run starts from Home.
             send_key('Home', configuration['manufacturer'])
             time.sleep(EXIT_WAIT_SECONDS)
@@ -694,7 +744,7 @@ def main():
                 'Run': result['run'],
                 'Timestamp': timestamp,
                 'Standby_Seconds': configuration['standby_seconds'],
-                'Launch_Time_ms': (
+                'Stream_Start_ms': (
                     round(result['response_time_ms'], 2) if result['response_time_ms'] is not None else None
                 ),
                 'Frames': result['frame_count'],
@@ -717,9 +767,9 @@ def main():
                 'SWV': configuration['SWV'],
                 'LGCV': configuration['LGCV'],
                 'Standby_Seconds': configuration['standby_seconds'],
-                'Similarity_Threshold': threshold,
+                'Motion_Threshold': round(motion_threshold, 2),
                 'Route': ' '.join(route),
-                'Launch_Time_ms': row['Launch_Time_ms'],
+                'Stream_Start_ms': row['Stream_Start_ms'],
                 'Frames': row['Frames'],
                 'Status': row['Status'],
             })

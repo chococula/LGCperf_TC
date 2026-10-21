@@ -109,8 +109,12 @@ def _write_mp4(paths, times, mp4_path):
         raise subprocess.CalledProcessError(process.returncode, "ffmpeg")
 
 
-def make_run_videos(run_dir, add_overlay=False, threshold=0.7, run_label="RUN", draw_overlay=None):
-    """Create run.mp4 and run.gif in run_dir. Returns {'mp4': path, 'gif': path} or None."""
+def make_run_videos(run_dir, add_overlay=False, threshold=0.7, run_label="RUN", draw_overlay=None, end_ms=None):
+    """Create run.mp4 and run.gif in run_dir. Returns {'mp4': path, 'gif': path} or None.
+
+    The video ends at end_ms (elapsed time of the measured event) when given; otherwise at the first
+    frame that reaches `threshold`.
+    """
     frames_dir = os.path.join(run_dir, "frames")
     if not os.path.isdir(frames_dir):
         print(f"[VIDEO] No frames folder in {run_dir}; skipping.")
@@ -119,9 +123,12 @@ def make_run_videos(run_dir, add_overlay=False, threshold=0.7, run_label="RUN", 
     if not entries:
         print(f"[VIDEO] No frames in {frames_dir}; skipping.")
         return None
-    end = detection_index(entries, threshold)
-    if end is not None:
-        entries = entries[:end + 1]
+    if end_ms is not None:
+        entries = [entry for entry in entries if entry[1] <= end_ms + 0.5] or entries[:1]
+    else:
+        end = detection_index(entries, threshold)
+        if end is not None:
+            entries = entries[:end + 1]
 
     work_dir = tempfile.mkdtemp(prefix="run_video_")
     try:
