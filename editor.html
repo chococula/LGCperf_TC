@@ -175,7 +175,7 @@
   <div id="confirm"></div>
 
   <div class="table-wrap"><table id="table"></table></div>
-  <p class="help">Build 2026-10-21 b9</p>
+  <p class="help">Build 2026-10-21 b11</p>
   <p class="help">Double-click a cell to change just that value. Use Edit for the whole row. Row_ID and Uploaded_At are set automatically.</p>
 </div>
 
@@ -199,7 +199,7 @@ const API_URL = window.LGCPERF_API_URL && !/XXXX/.test(window.LGCPERF_API_URL) ?
 const KEY_STORAGE = 'lgcperf-admin-key';
 const ID = 'Row_ID';
 const READ_ONLY = [ID, 'Uploaded_At', 'Excluded_At'];
-const HIDDEN = [ID, 'Directory'];
+const HIDDEN = [ID];
 const PREFERRED = ['Timestamp', 'Session', 'Run', 'Status', 'Home_Time_ms', 'Excluded', 'Exclude_Reason',
                    'SoC', 'SWV', 'LGCV', 'Manufacturer'];
 const STATUS_VALUES = ['PASS', 'FAIL', 'INVALID'];
