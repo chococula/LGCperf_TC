@@ -103,6 +103,7 @@
   .btn:hover { border-color: var(--accent); }
   .btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .btn.danger { color: var(--fail); }
+  a.btn { text-decoration: none; display: inline-block; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .filters label.check { flex-direction: row; align-items: center; align-self: flex-end; gap: 6px; padding-bottom: 6px;
                          text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 400; color: var(--text); }
@@ -130,6 +131,7 @@
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
       <span id="updated"><span class="status-dot"></span>Loading…</span>
+      <a class="btn" href="editor.html">Open data editor</a>
       <div class="admin" id="admin"></div>
     </div>
   </header>
@@ -178,7 +180,7 @@
 <script>
 const REFRESH_MS = 30000;
 const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
-const HIDDEN_COLUMNS = ['_row', 'Excluded', 'Excluded_At', 'Uploaded_At'];
+const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At'];
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
 const IN_APPS_SCRIPT = !!(window.google && google.script && google.script.run);
@@ -195,7 +197,7 @@ function esc(value) {
 function num(value) { const n = parseFloat(String(value).replace(/,/g, '')); return isFinite(n) ? n : null; }
 function fmt(n, digits = 0) { return n == null ? '–' : n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }); }
 function buildKey(r) { return [r.SoC, r.SWV, r.LGCV].filter(Boolean).join(' / ') || 'Unknown'; }
-function rowId(r) { return state.tc + '|' + r._row; }
+function rowId(r) { return state.tc + '|' + r.Row_ID; }
 function isExcluded(r) { return String(r.Excluded).toUpperCase() === 'Y'; }
 function dayOf(r) { const m = String(r.Timestamp).match(/^(\d{4})(\d{2})(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]}` : ''; }
 function isoDay(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
@@ -230,7 +232,7 @@ async function apiCall(name, args) {
   } else {
     const body = name === 'checkAdminKey'
       ? { action: 'checkKey', key: args[0] }
-      : { action: 'exclude', tc: args[0], row: args[1], excluded: args[2], reason: args[3], key: args[4] };
+      : { action: 'exclude', tc: args[0], ids: args[1], excluded: args[2], reason: args[3], key: args[4] };
     response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
   }
   if (!response.ok) throw new Error(`Server returned ${response.status}. Check the API URL in config.js.`);
@@ -286,7 +288,7 @@ function renderAdmin() {
 }
 
 function setExcluded(row, excluded, reason) {
-  call('setExcluded', [state.tc, row._row, excluded, reason, state.adminKey], updated => {
+  call('setExcluded', [state.tc, [row.Row_ID], excluded, reason, state.adminKey], updated => {
     Object.assign(row, updated);
     state.editingRow = null; state.error = '';
     renderAdmin(); render();
@@ -531,7 +533,7 @@ const demoServer = (() => {
     for (let run = 1; run <= 8; run++) {
       const fail = b === 0 && run === 4, spike = b === 1 && run === 6;
       rows.push({
-        _row: rows.length + 2, Uploaded_At: '', TC: 'Omedia_TC01', Session: session, Run: run,
+        Row_ID: 'demo-' + (rows.length + 1), Uploaded_At: '', TC: 'Omedia_TC01', Session: session, Run: run,
         Timestamp: `202610${day}_${String(9 + run).padStart(2, '0')}1500`, Manufacturer: 'Samsung',
         SoC, SWV, LGCV, Standby_Seconds: 300, Similarity_Threshold: 0.7,
         Home_Time_ms: fail ? '20000.00' : spike ? '14820.40' : (base + Math.sin(run * 1.7) * 300).toFixed(2),

@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LGCperf Data Editor</title>
+<script src="config.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: working table editor — source + selection toolbar on top, one wide editable grid below. Same tokens as the dashboard. */
+  :root {
+    --bg: #f3f5f8; --panel: #ffffff; --text: #18202c; --muted: #5d6879; --line: #dde2ea;
+    --accent: #0f6fae; --on-accent: #ffffff; --edit-bg: #fff6d6;
+    --pass: #1b7a43; --pass-bg: #e5f4ea; --fail: #c0362c; --fail-bg: #fbe9e7; --warn: #9a5b00; --warn-bg: #fdf1dc;
+    --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0f141b; --panel: #171e27; --text: #e3e8ef; --muted: #93a0b2; --line: #28323f;
+      --accent: #5bb2ec; --on-accent: #0b1520; --edit-bg: #3a3214;
+      --pass: #5fd08f; --pass-bg: #15301f; --fail: #f2837a; --fail-bg: #3a1b18; --warn: #f0b75e; --warn-bg: #3a2a10;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f141b; --panel: #171e27; --text: #e3e8ef; --muted: #93a0b2; --line: #28323f;
+    --accent: #5bb2ec; --on-accent: #0b1520; --edit-bg: #3a3214;
+    --pass: #5fd08f; --pass-bg: #15301f; --fail: #f2837a; --fail-bg: #3a1b18; --warn: #f0b75e; --warn-bg: #3a2a10;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-body); }
+  .wrap { max-width: 1440px; margin: 0 auto; padding-block: 24px 48px;
+          padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+          display: flex; flex-direction: column; gap: 14px; }
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; }
+  h1 { font: 600 30px/1 var(--font-display); letter-spacing: .01em; margin: 0; text-wrap: balance; }
+  .definition { margin: 6px 0 0; color: var(--muted); font-size: 13px; max-width: 70ch; }
+  .muted { color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .source { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+            font: 600 12px var(--font-body); background: var(--bg); border: 1px solid var(--line); }
+  .source.sheet { color: var(--pass); }
+  .source.csv { color: var(--accent); }
+  .source.sample { color: var(--warn); }
+  .btn { font: 500 12px var(--font-body); padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+         background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.danger { color: var(--fail); }
+  .btn.danger.solid { background: var(--fail); border-color: var(--fail); color: var(--panel); }
+  .btn:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input[type="text"], input[type="search"], input[type="password"], input[type="date"], select {
+    font: 13px var(--font-body); padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); color: var(--text); }
+  input[type="search"] { width: 220px; max-width: 100%; }
+  .file-btn input { display: none; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tab { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+         padding: 6px 14px; border-radius: 6px; cursor: pointer; font: 500 13px var(--font-body); }
+  .tab .muted { font: 12px var(--font-mono); margin-left: 6px; }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .tab.active .muted { color: inherit; opacity: .8; }
+  .spacer { flex: 1; }
+  .confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px;
+             border: 1px solid var(--line); background: var(--panel); }
+  .confirm.danger { border-color: var(--fail); background: var(--fail-bg); }
+  .confirm input { width: 260px; max-width: 100%; }
+  .message { font-size: 13px; }
+  .message.ok { color: var(--pass); }
+  .message.error { color: var(--fail); }
+  .table-wrap { overflow: auto; max-height: calc(100vh - 260px); min-height: 240px; border: 1px solid var(--line);
+                border-radius: 8px; background: var(--panel); }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+       position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  td { font: 13px var(--font-mono); }
+  td.editable { cursor: text; }
+  td.editable:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+  td.readonly { color: var(--muted); }
+  td.dirty { background: var(--edit-bg); }
+  td.sel, th.sel { width: 34px; text-align: center; }
+  tr.selected td { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  tr.selected td.dirty { background: var(--edit-bg); }
+  tr.excluded td:not(.sel) { color: var(--muted); }
+  td input.cell, td select.cell { font: 13px var(--font-mono); width: 100%; min-width: 120px; padding: 2px 4px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 4px; font: 600 11px var(--font-body); letter-spacing: .06em; }
+  .badge.PASS { color: var(--pass); background: var(--pass-bg); }
+  .badge.FAIL { color: var(--fail); background: var(--fail-bg); }
+  .badge.INVALID { color: var(--warn); background: var(--warn-bg); }
+  .chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font: 600 11px var(--font-body);
+          color: var(--muted); border: 1px solid var(--line); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-family: var(--font-body); }
+  .help { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>LGCperf Data Editor</h1>
+      <p class="definition">Edit result rows, exclude bad runs, or delete them for good. Changes to the Google Sheet need the admin key; deleted rows are copied to the sheet's <code>_Deleted</code> tab first.</p>
+    </div>
+    <div class="row">
+      <span class="source" id="source"></span>
+      <a class="btn" href="./">Back to dashboard</a>
+    </div>
+  </header>
+
+  <div class="panel row">
+    <span class="label">Data</span>
+    <label class="btn file-btn">Open CSV file…<input type="file" id="csv-file" accept=".csv,text/csv"></label>
+    <button class="btn" id="download" hidden>Download edited CSV</button>
+    <button class="btn" id="use-sheet" hidden>Back to Google Sheet</button>
+    <span class="spacer"></span>
+    <div class="row" id="admin"></div>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div class="row">
+    <input type="search" id="search" placeholder="Search any column">
+    <label class="row" style="gap:6px"><span class="label">From</span><input type="date" id="from"></label>
+    <label class="row" style="gap:6px"><span class="label">To</span><input type="date" id="to"></label>
+    <label class="row" style="gap:6px"><span class="label">Status</span>
+      <select id="status"><option value="">All</option><option>PASS</option><option>FAIL</option><option>INVALID</option></select></label>
+    <label class="row" style="gap:6px"><input type="checkbox" id="show-excluded" checked> Show excluded</label>
+  </div>
+
+  <div class="panel row">
+    <span id="selection" class="muted">No rows selected</span>
+    <button class="btn" data-bulk="exclude">Exclude…</button>
+    <button class="btn" data-bulk="restore">Restore</button>
+    <button class="btn danger" data-bulk="delete">Delete…</button>
+    <span class="spacer"></span>
+    <span id="pending" class="muted"></span>
+    <button class="btn" id="discard">Discard</button>
+    <button class="btn primary" id="save">Save changes</button>
+  </div>
+
+  <div id="confirm"></div>
+  <div class="message" id="message" role="status"></div>
+
+  <div class="table-wrap"><table id="table"></table></div>
+  <p class="help">Click a cell to edit it, then press Enter (Esc cancels). Edited cells stay highlighted until you save. Row_ID and Uploaded_At are set by the system and cannot be edited.</p>
+</div>
+
+<script>
+const API_URL = window.LGCPERF_API_URL && !/XXXX/.test(window.LGCPERF_API_URL) ? window.LGCPERF_API_URL : '';
+const KEY_STORAGE = 'lgcperf-admin-key';
+const ID = 'Row_ID';
+const READ_ONLY = [ID, 'Uploaded_At', 'Excluded_At'];
+const HIDDEN = [ID];
+const PREFERRED = ['Timestamp', 'Session', 'Run', 'Status', 'Home_Time_ms', 'Excluded', 'Exclude_Reason',
+                   'SoC', 'SWV', 'LGCV', 'Manufacturer'];
+const STATUS_VALUES = ['PASS', 'FAIL', 'INVALID'];
+
+const state = {
+  mode: API_URL ? 'sheet' : 'sample',   // sheet | csv | sample
+  data: {}, tc: null, pending: {}, selected: new Set(), adminKey: null,
+  fileName: null, fileHadIds: true, fileDirty: false, confirm: null, editing: null, nextLocalId: 1,
+};
+const $ = id => document.getElementById(id);
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function dayOf(r) { const m = String(r.Timestamp || '').match(/^(\d{4})(\d{2})(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]}` : ''; }
+function isExcluded(r) { return String(r.Excluded || '').toUpperCase() === 'Y'; }
+function nowText() { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().replace('T', ' ').slice(0, 19); }
+function rows() { return state.tc ? state.data[state.tc] || [] : []; }
+function pendingCount() { return Object.values(state.pending).reduce((n, cols) => n + Object.keys(cols).length, 0); }
+function needsKey() { return state.mode === 'sheet' && !state.adminKey; }
+
+function say(text, kind = 'ok') {
+  const box = $('message');
+  box.className = 'message ' + kind;
+  box.textContent = text;
+}
+
+// ---------- backends ----------
+async function sheetPost(body) {
+  const response = await fetch(API_URL, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ ...body, key: state.adminKey }),
+  });
+  if (!response.ok) throw new Error(`Server returned ${response.status}. Check the API URL in config.js.`);
+  const json = await response.json();
+  if (!json.ok) throw new Error(json.error || 'Request was rejected.');
+  return json;
+}
+
+const backend = {
+  async load() {
+    if (state.mode === 'sheet') {
+      const response = await fetch(API_URL + '?action=data');
+      if (!response.ok) throw new Error(`Could not load the sheet (HTTP ${response.status}).`);
+      const json = await response.json();
+      if (!json.ok) throw new Error(json.error || 'Could not load the sheet.');
+      state.data = json.data;
+    } else if (state.mode === 'sample') {
+      state.data = sampleData();
+    }
+  },
+  async update(changes) {
+    if (state.mode === 'sheet') return sheetPost({ action: 'update', tc: state.tc, changes });
+    changes.forEach(({ id, values }) => Object.assign(rows().find(r => r[ID] === id), values));
+    markLocalChange();
+  },
+  async exclude(ids, excluded, reason) {
+    if (state.mode === 'sheet') return sheetPost({ action: 'exclude', tc: state.tc, ids, excluded, reason });
+    const values = { Excluded: excluded ? 'Y' : '', Exclude_Reason: excluded ? reason : '', Excluded_At: excluded ? nowText() : '' };
+    rows().filter(r => ids.includes(r[ID])).forEach(r => Object.assign(r, values));
+    markLocalChange();
+  },
+  async remove(ids) {
+    if (state.mode === 'sheet') return sheetPost({ action: 'delete', tc: state.tc, ids });
+    state.data[state.tc] = rows().filter(r => !ids.includes(r[ID]));
+    markLocalChange();
+  },
+};
+
+function markLocalChange() { if (state.mode === 'csv') state.fileDirty = true; }
+
+async function reload() {
+  try {
+    await backend.load();
+    const tcs = Object.keys(state.data);
+    if (!tcs.includes(state.tc)) state.tc = tcs[0] || null;
+    render();
+  } catch (error) {
+    say(error.message, 'error');
+  }
+}
+
+async function run(task, success) {
+  try {
+    await task();
+    say(success, 'ok');
+    if (state.mode === 'sheet') await backend.load();
+  } catch (error) {
+    say(error.message, 'error');
+  }
+  render();
+}
+
+// ---------- CSV ----------
+function parseCsv(text) {
+  const out = []; let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.some(v => v !== '')) out.push(row);
+      row = [];
+    } else field += c;
+  }
+  row.push(field);
+  if (row.some(v => v !== '')) out.push(row);
+  return out;
+}
+
+function toCsv(records, columns) {
+  const cell = v => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  return [columns.map(cell).join(',')].concat(records.map(r => columns.map(c => cell(r[c])).join(','))).join('\r\n') + '\r\n';
+}
+
+function loadCsvFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const table = parseCsv(String(reader.result).replace(/^﻿/, ''));
+    if (table.length < 1) { say('That file has no rows.', 'error'); return; }
+    const header = table[0];
+    state.fileHadIds = header.includes(ID);
+    const data = {};
+    table.slice(1).forEach(line => {
+      const record = {};
+      header.forEach((key, index) => { record[key] = line[index] ?? ''; });
+      if (!record[ID]) record[ID] = 'local-' + state.nextLocalId++;
+      const tc = record.TC || file.name.replace(/\.csv$/i, '');
+      (data[tc] = data[tc] || []).push(record);
+    });
+    Object.assign(state, { mode: 'csv', data, tc: Object.keys(data)[0], fileName: file.name, fileDirty: false,
+                           pending: {}, selected: new Set(), confirm: null });
+    say(`Opened ${file.name}: ${table.length - 1} rows. Edits stay in this browser until you download the CSV.`, 'ok');
+    render();
+  };
+  reader.readAsText(file);
+}
+
+function downloadCsv() {
+  const all = Object.values(state.data).flat();
+  let columns = [...new Set(all.flatMap(r => Object.keys(r)))];
+  if (!state.fileHadIds) columns = columns.filter(c => c !== ID);
+  const blob = new Blob(['﻿' + toCsv(all, columns)], { type: 'text/csv;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = state.fileName || 'results.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  state.fileDirty = false;
+  say(`Downloaded ${link.download}. Replace the original file with it to keep the changes.`, 'ok');
+  render();
+}
+
+// ---------- admin key ----------
+function renderAdmin() {
+  const box = $('admin');
+  if (state.mode !== 'sheet') { box.innerHTML = '<span class="help">No admin key needed for local files</span>'; return; }
+  if (state.adminKey) {
+    box.innerHTML = '<span class="source sheet">Editing unlocked</span><button class="btn" id="lock">Lock</button>';
+    $('lock').onclick = () => { state.adminKey = null; try { localStorage.removeItem(KEY_STORAGE); } catch (e) {} render(); };
+    return;
+  }
+  box.innerHTML = '<input type="password" id="key" placeholder="Admin key" autocomplete="off"><button class="btn" id="unlock">Unlock editing</button>';
+  const unlock = async () => {
+    const key = $('key').value.trim();
+    if (!key) return;
+    state.adminKey = key;
+    try {
+      await sheetPost({ action: 'checkKey' });
+      try { localStorage.setItem(KEY_STORAGE, key); } catch (e) {}
+      say('Editing unlocked.', 'ok');
+    } catch (error) {
+      state.adminKey = null;
+      say(error.message, 'error');
+    }
+    render();
+  };
+  $('unlock').onclick = unlock;
+  $('key').onkeydown = e => { if (e.key === 'Enter') unlock(); };
+}
+
+// ---------- filtering & rendering ----------
+function visibleRows() {
+  const query = $('search').value.trim().toLowerCase();
+  const from = $('from').value, to = $('to').value, status = $('status').value;
+  const showExcluded = $('show-excluded').checked;
+  return rows().filter(r => {
+    if (!showExcluded && isExcluded(r)) return false;
+    if (status && r.Status !== status) return false;
+    const day = dayOf(r);
+    if (from && day && day < from) return false;
+    if (to && day && day > to) return false;
+    return !query || Object.values(r).some(v => String(v).toLowerCase().includes(query));
+  });
+}
+
+function columnsFor(list) {
+  const keys = [...new Set(list.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN.includes(k));
+  return PREFERRED.filter(k => keys.includes(k)).concat(keys.filter(k => !PREFERRED.includes(k)));
+}
+
+function render() {
+  const labels = { sheet: 'Google Sheet (live)', csv: `Local file: ${state.fileName}`, sample: 'Sample data' };
+  $('source').className = 'source ' + state.mode;
+  $('source').textContent = labels[state.mode] + (state.fileDirty ? ' · not downloaded' : '');
+  $('download').hidden = state.mode !== 'csv';
+  $('download').className = state.fileDirty ? 'btn primary' : 'btn';
+  $('use-sheet').hidden = !(API_URL && state.mode === 'csv');
+  renderAdmin();
+
+  const tcs = Object.keys(state.data);
+  $('tabs').innerHTML = tcs.map(tc =>
+    `<button class="tab ${tc === state.tc ? 'active' : ''}" data-tc="${esc(tc)}">${esc(tc)}<span class="muted">${state.data[tc].length}</span></button>`).join('');
+  $('tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => {
+    if (pendingCount() && !window.confirm('Discard unsaved edits on this tab?')) return;
+    Object.assign(state, { tc: b.dataset.tc, pending: {}, selected: new Set(), confirm: null }); render();
+  });
+
+  const ids = new Set(rows().map(r => r[ID]));
+  state.selected = new Set([...state.selected].filter(id => ids.has(id)));
+  const n = state.selected.size, p = pendingCount(), locked = needsKey();
+  $('selection').textContent = n ? `${n} row${n > 1 ? 's' : ''} selected` : 'No rows selected';
+  document.querySelectorAll('[data-bulk]').forEach(b => { b.disabled = !n || locked; });
+  $('pending').textContent = p ? `${p} unsaved edit${p > 1 ? 's' : ''}` : '';
+  $('save').disabled = !p || locked;
+  $('discard').disabled = !p;
+  renderConfirm();
+  renderTable();
+}
+
+function renderConfirm() {
+  const box = $('confirm');
+  const n = state.selected.size;
+  if (!state.confirm || !n) { box.innerHTML = ''; state.confirm = null; return; }
+  if (state.confirm === 'exclude') {
+    box.innerHTML = `<div class="confirm"><span>Exclude ${n} row${n > 1 ? 's' : ''} from statistics. Reason:</span>
+      <input type="text" id="reason" placeholder="e.g. TV did not turn off">
+      <button class="btn primary" id="confirm-ok">Exclude ${n}</button><button class="btn" id="confirm-cancel">Cancel</button></div>`;
+    $('reason').focus();
+    $('reason').onkeydown = e => { if (e.key === 'Enter') $('confirm-ok').click(); if (e.key === 'Escape') $('confirm-cancel').click(); };
+  } else {
+    const where = state.mode === 'sheet'
+      ? 'They are copied to the _Deleted tab of the sheet, then removed.'
+      : 'They are removed from the loaded file; download the CSV to keep the change.';
+    box.innerHTML = `<div class="confirm danger"><span><b>Permanently delete ${n} row${n > 1 ? 's' : ''}?</b> ${where}</span>
+      <button class="btn danger solid" id="confirm-ok">Delete ${n} row${n > 1 ? 's' : ''}</button><button class="btn" id="confirm-cancel">Cancel</button></div>`;
+  }
+  $('confirm-cancel').onclick = () => { state.confirm = null; render(); };
+  $('confirm-ok').onclick = () => {
+    const ids = [...state.selected];
+    if (state.confirm === 'exclude') {
+      const reason = $('reason').value.trim();
+      if (!reason) { $('reason').focus(); say('Enter a reason so others know why the runs were excluded.', 'error'); return; }
+      state.confirm = null;
+      run(() => backend.exclude(ids, true, reason), `Excluded ${ids.length} row${ids.length > 1 ? 's' : ''}.`);
+    } else {
+      state.confirm = null;
+      ids.forEach(id => delete state.pending[id]);
+      state.selected = new Set();
+      run(() => backend.remove(ids), `Deleted ${ids.length} row${ids.length > 1 ? 's' : ''}.`);
+    }
+  };
+}
+
+function cellHtml(r, c) {
+  const pending = state.pending[r[ID]] || {};
+  const value = c in pending ? pending[c] : r[c];
+  const readOnly = READ_ONLY.includes(c);
+  const cls = [readOnly ? 'readonly' : 'editable', c in pending ? 'dirty' : ''].join(' ');
+  let shown = esc(value);
+  if (c === 'Status' && value) shown = `<span class="badge ${esc(value)}">${esc(value)}</span>`;
+  if (c === 'Excluded' && String(value).toUpperCase() === 'Y') shown = '<span class="chip">Excluded</span>';
+  return `<td class="${cls}" data-id="${esc(r[ID])}" data-col="${esc(c)}">${shown}</td>`;
+}
+
+function renderTable() {
+  const table = $('table');
+  const list = visibleRows().slice().reverse();
+  if (!list.length) {
+    table.innerHTML = `<tr><td class="empty">${rows().length ? 'No rows match these filters.' : 'No data yet. Open a CSV file or connect the Google Sheet.'}</td></tr>`;
+    return;
+  }
+  const columns = columnsFor(rows());
+  const allSelected = list.every(r => state.selected.has(r[ID]));
+  table.innerHTML = `<tr><th class="sel"><input type="checkbox" id="select-all" aria-label="Select all shown rows" ${allSelected ? 'checked' : ''}></th>` +
+    columns.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>' +
+    list.map(r => `<tr class="${state.selected.has(r[ID]) ? 'selected' : ''} ${isExcluded(r) ? 'excluded' : ''}">` +
+      `<td class="sel"><input type="checkbox" data-select="${esc(r[ID])}" aria-label="Select row" ${state.selected.has(r[ID]) ? 'checked' : ''}></td>` +
+      columns.map(c => cellHtml(r, c)).join('') + '</tr>').join('');
+
+  $('select-all').onchange = e => { list.forEach(r => e.target.checked ? state.selected.add(r[ID]) : state.selected.delete(r[ID])); render(); };
+  table.querySelectorAll('[data-select]').forEach(box => box.onchange = () => {
+    box.checked ? state.selected.add(box.dataset.select) : state.selected.delete(box.dataset.select); render();
+  });
+  table.querySelectorAll('td.editable').forEach(td => td.onclick = () => startEdit(td));
+}
+
+function startEdit(td) {
+  if (td.querySelector('.cell')) return;
+  const id = td.dataset.id, col = td.dataset.col;
+  const record = rows().find(r => r[ID] === id);
+  const pending = state.pending[id] || {};
+  const current = col in pending ? pending[col] : record[col] ?? '';
+  td.innerHTML = col === 'Status'
+    ? `<select class="cell">${STATUS_VALUES.concat(STATUS_VALUES.includes(current) ? [] : [current])
+        .map(v => `<option ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`
+    : `<input class="cell" type="text" value="${esc(current)}">`;
+  const input = td.querySelector('.cell');
+  input.focus();
+  if (input.select) input.select();
+  let done = false;
+  const finish = commit => {
+    if (done) return; done = true;
+    if (commit) {
+      const value = input.value;
+      const original = String(record[col] ?? '');
+      state.pending[id] = state.pending[id] || {};
+      if (value === original) delete state.pending[id][col]; else state.pending[id][col] = value;
+      if (!Object.keys(state.pending[id]).length) delete state.pending[id];
+    }
+    render();
+  };
+  input.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+  input.onblur = () => finish(true);
+  if (col === 'Status') input.onchange = () => finish(true);
+}
+
+// ---------- wiring ----------
+$('csv-file').onchange = e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if ((pendingCount() || state.fileDirty) && !window.confirm('You have unsaved changes. Open another file anyway?')) return;
+  loadCsvFile(file);
+};
+$('download').onclick = downloadCsv;
+$('use-sheet').onclick = () => {
+  if (state.fileDirty && !window.confirm('The edited CSV has not been downloaded. Switch anyway?')) return;
+  Object.assign(state, { mode: 'sheet', pending: {}, selected: new Set(), fileDirty: false, confirm: null });
+  reload();
+};
+['search', 'from', 'to', 'status', 'show-excluded'].forEach(id => $(id).addEventListener('input', () => render()));
+document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = () => {
+  const kind = b.dataset.bulk;
+  if (kind === 'restore') {
+    const ids = [...state.selected];
+    run(() => backend.exclude(ids, false, ''), `Restored ${ids.length} row${ids.length > 1 ? 's' : ''}.`);
+  } else {
+    state.confirm = kind; render();
+  }
+});
+$('discard').onclick = () => { state.pending = {}; say('Edits discarded.', 'ok'); render(); };
+$('save').onclick = () => {
+  const changes = Object.entries(state.pending).map(([id, values]) => ({ id, values }));
+  const count = pendingCount();
+  run(async () => { await backend.update(changes); state.pending = {}; }, `Saved ${count} edit${count > 1 ? 's' : ''}.`);
+};
+window.addEventListener('beforeunload', e => { if (pendingCount() || state.fileDirty) { e.preventDefault(); e.returnValue = ''; } });
+
+function sampleData() {
+  const rows = [];
+  [['20261018_093000', '9200'], ['20261020_093000', '8400']].forEach(([session, base], b) => {
+    for (let run = 1; run <= 5; run++) {
+      rows.push({
+        Row_ID: `sample-${b}-${run}`, Uploaded_At: '', TC: 'Omedia_TC01', Session: session, Run: String(run),
+        Timestamp: session.slice(0, 9) + String(10 + run).padStart(2, '0') + '1500', Manufacturer: 'Samsung',
+        SoC: 'U8000', SWV: b ? '1310' : '1300', LGCV: b ? '8.2.010' : '8.2.008', Standby_Seconds: '300',
+        Similarity_Threshold: '0.7', Home_Time_ms: run === 3 && !b ? '0.22' : (Number(base) + run * 37).toFixed(2),
+        Frames: run === 3 && !b ? '1' : String(270 + run), Status: run === 3 && !b ? 'INVALID' : 'PASS',
+        Excluded: '', Exclude_Reason: '', Excluded_At: '',
+      });
+    }
+  });
+  return { Omedia_TC01: rows };
+}
+
+try { state.adminKey = localStorage.getItem(KEY_STORAGE); } catch (e) {}
+if (state.mode === 'sample') say('Showing sample data. Open a CSV file to edit local results, or connect the Google Sheet in config.js.', 'ok');
+reload();
+</script>
+</body>
+</html>
