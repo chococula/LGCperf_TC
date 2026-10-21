@@ -45,6 +45,7 @@ DEFAULT_CONFIGURATION = {
     'route': [],
     'target_point': [],
     'plan_steps': {},
+    'navigation': {},            # per SoC: the setup that worked (route, plan_steps, stream_roi, motion_threshold)
     'stream_roi': [],
     'motion_threshold': 0.0,
 }
@@ -61,7 +62,8 @@ CAPTURE_WINDOW = "Omedia_TC02 Capture"
 MIN_MOTION_THRESHOLD = 2.0      # mean gray-level change per frame inside the live video area
 MOTION_THRESHOLD_RATIO = 0.4    # streaming = motion of at least 40% of the measured playing motion
 MIN_STREAM_BRIGHTNESS = 20      # a black screen is not streaming
-STREAM_CONFIRM_FRAMES = 3       # consecutive moving frames needed; the first one is the start time
+PLAYBACK_WINDOW_FRAMES = 15     # playback = in this many frames (~0.5 s) ...
+PLAYBACK_MIN_FRACTION = 0.7     # ... at least this share move; the start is the window's first frame
 STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
 MIN_STILL_FRAMES = 2            # after the key the picture must stop (black/frozen) this many frames first
 GUIDE_KEY_GAP_SECONDS = 1.0     # Guide method: wait between OK, OK and Down
@@ -69,6 +71,7 @@ GUIDE_OPEN_SECONDS = 5.0        # Guide method: stay on the GUIDE this long afte
 ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
 TILE_STEP_RATIO = 1.15         # fallback step (tile size + gap) when the next tile cannot be measured
 PRE_ROLL_SECONDS = 2.0
+STEP_LOAD_SECONDS = 6           # saved navigation: wait after each OK for the next screen to load
 HOME_SETTLE_SECONDS = 3
 KEY_GAP_SECONDS = 0.5
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC02_response.csv")
@@ -640,6 +643,34 @@ def calibrate_playback(configuration, camera, calibration_dir):
     return roi, threshold
 
 
+def show_for(camera, seconds, label):
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        frame = read_frame(camera)
+        if frame is not None:
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [(label, (255, 255, 255), 1.0)]))
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            raise KeyboardInterrupt("Canceled by user.")
+
+
+def replay_saved_navigation(configuration, camera, saved):
+    """Run the saved navigation for this model with no clicks: Home, TV Plus, each planned step, each + OK."""
+    manufacturer = configuration['manufacturer']
+    print(f"[SETUP] Replaying the saved navigation: Home -> {', '.join(saved['route'])} + OK", end='')
+    press_home(manufacturer, camera)
+    replay_route(saved['route'], manufacturer, camera)
+    send_key('OK', manufacturer)
+    show_for(camera, STEP_LOAD_SECONDS, f"Opening {APP_NAME}...")
+    for step_no in sorted(saved['plan_steps'], key=int):
+        keys = saved['plan_steps'][step_no]['route']
+        print(f" -> step {step_no}: {describe_route(keys)} + OK", end='')
+        replay_route(keys, manufacturer, camera)
+        send_key('OK', manufacturer)
+        show_for(camera, STEP_LOAD_SECONDS, f"Step {step_no} done, waiting for the screen...")
+    print()
+    return saved['stream_roi'], saved['motion_threshold']
+
+
 # ---------- measurement: Ch Up zapping ----------
 
 def check_playing(frame_capture, roi, motion_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
@@ -687,8 +718,7 @@ def measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, 
     last_elapsed_ms = 0.0
     detected = False
     still_frames = start_still  # consecutive frames with no playback (black or frozen)
-    streak = 0
-    candidate_ms = None
+    window = []                 # (elapsed_ms, moving, after_still) for the last PLAYBACK_WINDOW_FRAMES
     detected_elapsed_ms = None
     previous_roi = last_roi
     stop_at_ms = None
@@ -711,8 +741,8 @@ def measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, 
             annotate(frame, [(f"RUN {run_idx}  BEFORE {key_label}  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
         )
 
-    print(f"[RUN {run_idx}] Waiting for the new channel to play (motion >= {motion_threshold:.1f} for "
-          f"{STREAM_CONFIRM_FRAMES} frames after the picture stops)...")
+    print(f"[RUN {run_idx}] Waiting for the new channel to play (motion >= {motion_threshold:.1f} in "
+          f"{PLAYBACK_MIN_FRACTION:.0%} of {PLAYBACK_WINDOW_FRAMES} frames after the picture stops)...")
     try:
         while time.perf_counter() - key_pressed_at <= timeout:
             captured = frame_capture.get_frame()
@@ -733,20 +763,20 @@ def measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, 
             playing = motion >= motion_threshold and brightness >= MIN_STREAM_BRIGHTNESS
             if not playing:
                 still_frames += 1
-                streak = 0
-            elif still_frames >= MIN_STILL_FRAMES and not detected:
-                # The old channel stopped (black or frozen) and the new one is moving.
-                streak += 1
-                if streak == 1:
-                    candidate_ms = elapsed_ms
-                if streak >= STREAM_CONFIRM_FRAMES:
-                    detected = True
-                    detected_elapsed_ms = candidate_ms
-                    stop_at_ms = elapsed_ms + STREAM_EXTRA_SECONDS * 1000.0
-                    print(f"[RUN {run_idx}] New channel playing at {candidate_ms:.2f} ms "
-                          f"(motion {motion:.1f} >= {motion_threshold:.1f}).")
-                    winsound.Beep(1500, 250)
-                    winsound.Beep(2500, 350)
+            # Playback = sustained motion: most frames of a short window move. Short bursts (the GUIDE
+            # closing, a banner sliding, a loading animation) do not qualify.
+            window.append((elapsed_ms, playing, still_frames >= MIN_STILL_FRAMES))
+            if len(window) > PLAYBACK_WINDOW_FRAMES:
+                window.pop(0)
+            if (not detected and len(window) == PLAYBACK_WINDOW_FRAMES and window[0][1] and window[0][2]
+                    and sum(moving for _, moving, _ in window) >= PLAYBACK_MIN_FRACTION * PLAYBACK_WINDOW_FRAMES):
+                detected = True
+                detected_elapsed_ms = window[0][0]
+                stop_at_ms = elapsed_ms + STREAM_EXTRA_SECONDS * 1000.0
+                print(f"[RUN {run_idx}] New channel playing at {detected_elapsed_ms:.2f} ms "
+                      f"(confirmed by {PLAYBACK_WINDOW_FRAMES} frames of motion).")
+                winsound.Beep(1500, 250)
+                winsound.Beep(2500, 350)
 
             color = (0, 255, 0) if playing else (0, 255, 255)
             saved_lines = [
@@ -903,15 +933,30 @@ def main():
         )
         os.makedirs(calibration_dir, exist_ok=True)
 
-        # Input 1: Samsung TV Plus on Home (PACE_01), then OK.
-        route = calibrate_route(configuration, camera)
-        replay_route(route, configuration['manufacturer'], camera)
-        send_key('OK', configuration['manufacturer'])
-        # Input 2: the Live TV channel inside TV Plus, then OK.
-        plan_step(configuration, camera, 2, "the Live TV channel")
-        # Input 3: one more step inside Live TV, then OK.
-        plan_step(configuration, camera, 3, "the next item in Live TV")
-        roi, motion_threshold = calibrate_playback(configuration, camera, calibration_dir)
+        model = configuration['SoC']
+        saved_navigation = configuration['navigation'].get(model)
+        if saved_navigation and input(f"Use the saved navigation for {model} (no clicks needed)? (Y/n): "
+                                      ).strip().lower() in ('', 'y', 'yes'):
+            roi, motion_threshold = replay_saved_navigation(configuration, camera, saved_navigation)
+        else:
+            # Input 1: Samsung TV Plus on Home (PACE_01), then OK.
+            route = calibrate_route(configuration, camera)
+            replay_route(route, configuration['manufacturer'], camera)
+            send_key('OK', configuration['manufacturer'])
+            # Input 2: the Live TV channel inside TV Plus, then OK.
+            plan_step(configuration, camera, 2, "the Live TV channel")
+            # Input 3: one more step inside Live TV, then OK.
+            plan_step(configuration, camera, 3, "the next item in Live TV")
+            roi, motion_threshold = calibrate_playback(configuration, camera, calibration_dir)
+            # Keep this model's navigation so later sessions run without clicks.
+            configuration['navigation'][model] = {
+                'route': configuration['route'],
+                'plan_steps': configuration['plan_steps'],
+                'stream_roi': [int(v) for v in roi],
+                'motion_threshold': float(motion_threshold),
+            }
+            save_configuration(CONFIG_FILE, configuration)
+            print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
