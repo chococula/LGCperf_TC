@@ -187,6 +187,11 @@ const IN_APPS_SCRIPT = !!(window.google && google.script && google.script.run);
 // On GitHub Pages, config.js sets window.LGCPERF_API_URL to the Apps Script web app URL.
 const API_URL = !IN_APPS_SCRIPT && window.LGCPERF_API_URL && !/XXXX/.test(window.LGCPERF_API_URL) ? window.LGCPERF_API_URL : '';
 const LIVE = IN_APPS_SCRIPT || !!API_URL;
+// Without the Google Sheet, show the CSV the data editor has open in this browser (same site, shared storage).
+const SHARED_KEY = 'lgcperf-local-data';
+function sharedLocal() {
+  try { const value = JSON.parse(localStorage.getItem(SHARED_KEY)); return value && value.data ? value : null; } catch (e) { return null; }
+}
 const state = { data: {}, tc: null, metric: null, seen: new Set(), firstLoad: true,
                 adminKey: null, editingRow: null, error: '' };
 
@@ -220,7 +225,8 @@ function call(name, args, onOk) {
   } else if (API_URL) {
     apiCall(name, args).then(onOk, onFail);
   } else {
-    try { onOk(demoServer[name](...args)); } catch (error) { onFail(error); }
+    const shared = name === 'getResults' ? sharedLocal() : null;
+    try { onOk(shared ? shared.data : demoServer[name](...args)); } catch (error) { onFail(error); }
   }
 }
 
@@ -250,9 +256,16 @@ function onData(data) {
   state.data = data || {};
   const tcs = Object.keys(state.data);
   if (!state.tc || !state.data[state.tc]) state.tc = tcs[0] || null;
+  const shared = LIVE ? null : sharedLocal();
   document.getElementById('updated').innerHTML = LIVE
     ? '<span class="status-dot"></span>Updated ' + new Date().toLocaleTimeString() + ' · auto-refresh 30 s'
-    : 'Sample data · set the Apps Script URL in config.js to show real results';
+    : shared
+      ? `<span class="status-dot"></span>Local file ${esc(shared.name)} · from the data editor, ${esc(shared.savedAt)} ` +
+        '<button class="btn" id="show-sample">Show sample data</button>'
+      : 'Sample data · open your CSV in the data editor to see it here';
+  const sampleButton = document.getElementById('show-sample');
+  if (sampleButton) sampleButton.onclick = () => { try { localStorage.removeItem(SHARED_KEY); } catch (e) {} load(); };
+  renderAdmin();
   renderTabs(tcs);
   renderFilters();
   render();
@@ -262,6 +275,10 @@ function onData(data) {
 // ---------- admin (exclude / restore) ----------
 function renderAdmin() {
   const box = document.getElementById('admin');
+  if (!LIVE) {
+    box.innerHTML = sharedLocal() ? '<span>Exclude, edit, or delete runs in the data editor.</span>' : '';
+    return;
+  }
   const error = state.error ? `<span class="toast">${esc(state.error)}</span>` : '';
   if (state.adminKey) {
     box.innerHTML = `${error}<span class="on">Edit mode</span><button class="btn" id="admin-off">Lock</button>`;
@@ -557,6 +574,7 @@ try { state.adminKey = localStorage.getItem(KEY_STORAGE); } catch (e) {}
 renderAdmin();
 load();
 setInterval(load, REFRESH_MS);
+window.addEventListener('storage', e => { if (e.key === SHARED_KEY) load(); });
 </script>
 </body>
 </html>

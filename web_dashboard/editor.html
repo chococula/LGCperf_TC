@@ -475,7 +475,20 @@ function columnsFor(list) {
   return PREFERRED.filter(k => keys.includes(k)).concat(keys.filter(k => !PREFERRED.includes(k)));
 }
 
+// Share the open CSV with the dashboard page (same site) so it shows these rows.
+let lastShared = '';
+function shareWithDashboard() {
+  if (state.mode !== 'csv') return;
+  const data = JSON.stringify(state.data);
+  if (data === lastShared) return;
+  lastShared = data;
+  try {
+    localStorage.setItem('lgcperf-local-data', JSON.stringify({ name: state.file.name, savedAt: nowText(), data: state.data }));
+  } catch (e) {}
+}
+
 function render() {
+  shareWithDashboard();
   const labels = { sheet: 'Google Sheet (live)', csv: `File: ${state.file && state.file.name}`, sample: 'Sample data (not saved)' };
   $('source').className = 'source ' + state.mode;
   $('source').textContent = labels[state.mode];
