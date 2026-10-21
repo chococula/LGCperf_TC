@@ -3,7 +3,8 @@
 Setup:
   1. Home is shown; click the Samsung TV Plus card (route: Down) or its bottom app icon
      (route: Down, Down), as in PACE_01.
-  2. TV Plus is launched once; when live TV is playing, drag a box around the live video area.
+  2. TV Plus is launched once; press Enter in the camera window when live TV is playing to capture
+     the screen, then drag a box around the live video area on that captured screen.
      Its playing motion sets the "streaming" threshold (area and threshold are reused afterwards).
 Each run:
   Power cycle (optional) -> Home -> route -> check Home with TV Plus focused (2 s pre-roll) ->
@@ -30,6 +31,7 @@ from run_video import make_run_videos
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_config.json")
+TVPLUS_SCREEN_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_tvplus_screen.jpg")
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'Samsung',
     'SoC': 'U8000',
@@ -429,15 +431,34 @@ def capture_home_ready(camera):
     return np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
 
 
-def select_stream_area(camera):
-    """User drags a box around the live video on the TV Plus screen."""
-    frame = None
-    while frame is None:
+def capture_tvplus_screen(camera, calibration_dir):
+    """Live view after TV Plus opens; Enter in the window captures the screen shown at that moment."""
+    print(f"\n[SETUP] {APP_NAME} is opening. When the live TV stream is playing, press ENTER in the "
+          "camera window to capture the screen (Q = cancel).")
+    while True:
         frame = read_frame(camera)
+        if frame is None:
+            continue
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [
+            (f"{APP_NAME}: press ENTER when live TV is playing", (0, 255, 0), 1.0),
+        ]))
+        key = cv2.waitKey(1) & 0xFF
+        if key in (10, 13):
+            break
+        if key == ord('q'):
+            raise KeyboardInterrupt("Setup canceled.")
+    for path in (TVPLUS_SCREEN_FILE, os.path.join(calibration_dir, "tvplus_screen.jpg")):
+        cv2.imwrite(path, frame)
+    print(f"[SETUP] Captured the {APP_NAME} screen: {TVPLUS_SCREEN_FILE}")
+    return frame
+
+
+def select_stream_area(screen):
+    """User drags a box around the live video on the captured TV Plus screen."""
     window_name = "Select live video area"
-    print("\n[SETUP] Drag a box around the area where the live TV video plays, then press Enter "
-          "(C = cancel and redo).")
-    preview = draw_overlay(frame.copy(), [("Drag around the LIVE VIDEO area, then ENTER", (0, 255, 0), 1.0)])
+    print("\n[SETUP] On the captured screen, drag a box around the area where the live TV video plays, "
+          "then press Enter (C = cancel and redo).")
+    preview = draw_overlay(screen.copy(), [("Drag around the LIVE VIDEO area, then ENTER", (0, 255, 0), 1.0)])
     roi = cv2.selectROI(window_name, preview, showCrosshair=True, fromCenter=False)
     cv2.destroyWindow(window_name)
     x, y, w, h = (int(v) for v in roi)
@@ -467,21 +488,33 @@ def measure_playing_motion(camera, roi, seconds=2.0):
     return float(np.median(values)) if values else 0.0
 
 
-def setup_stream_detection(configuration, camera, route):
-    """Ask where live TV plays and how much it moves; reuse the saved area if the user agrees."""
+def setup_stream_detection(configuration, camera, route, calibration_dir):
+    """Capture the TV Plus screen, let the user mark the live video area, and measure its motion.
+
+    A saved area is shown on the saved TV Plus screen and can be reused.
+    """
     manufacturer = configuration['manufacturer']
+    saved_screen = cv2.imread(TVPLUS_SCREEN_FILE) if os.path.isfile(TVPLUS_SCREEN_FILE) else None
     if configuration['stream_roi'] and configuration['motion_threshold'] > 0:
         x, y, w, h = configuration['stream_roi']
         print(f"\n[SETUP] Saved live video area: x={x} y={y} w={w} h={h}, "
               f"motion threshold {configuration['motion_threshold']:.1f}")
-        if input("Reuse the saved live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
+        if saved_screen is not None:
+            preview = saved_screen.copy()
+            cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 3)
+            cv2.imshow("Saved live video area", draw_overlay(preview, [("Saved live video area", (0, 255, 255), 1.0)]))
+            cv2.waitKey(1)
+        reuse = input("Reuse the saved live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes')
+        if saved_screen is not None:
+            cv2.destroyWindow("Saved live video area")
+        if reuse:
             return configuration['stream_roi'], configuration['motion_threshold']
 
     while True:
         print(f"\n[SETUP] Launching {APP_NAME} once (not measured).")
         send_key('OK', manufacturer)
-        input("When the live TV stream is playing, press Enter: ")
-        roi = select_stream_area(camera)
+        screen = capture_tvplus_screen(camera, calibration_dir)
+        roi = select_stream_area(screen)
         if roi is None:
             print("[SETUP] The box is too small. Try again.")
             press_home(manufacturer, camera)
@@ -716,7 +749,7 @@ def main():
         replay_route(route, configuration['manufacturer'], camera)
         home_ready = capture_home_ready(camera)
         cv2.imwrite(os.path.join(calibration_dir, "home_ready.jpg"), home_ready)
-        roi, motion_threshold = setup_stream_detection(configuration, camera, route)
+        roi, motion_threshold = setup_stream_detection(configuration, camera, route, calibration_dir)
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
