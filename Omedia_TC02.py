@@ -1,9 +1,10 @@
 """Omedia_TC02 - Samsung TV Plus Live TV channel zapping (Ch Up) time.
 
-Setup (two inputs, same way each time: click on the live camera view, then Enter):
+Setup (three inputs, each a click on the live camera view, then Enter):
   1. Home: click the Samsung TV Plus card (Down) or its bottom app icon (Down, Down), as in PACE_01; OK.
   2. TV Plus: click the highlighted item, then the Live TV channel. The planned keys (e.g. Down x1,
      Right x2) are drawn on screen first; arrow keys adjust them; Enter sends exactly those keys + OK.
+  3. Live TV: the same as step 2 for one more item, then OK.
   The middle of the playing picture is used to detect playback; its motion sets the threshold.
 Each run:
   2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
@@ -40,8 +41,7 @@ DEFAULT_CONFIGURATION = {
     'zap_interval_seconds': 8,
     'route': [],
     'target_point': [],
-    'channel_clicks': [],
-    'channel_route': [],
+    'plan_steps': {},
     'stream_roi': [],
     'motion_threshold': 0.0,
 }
@@ -481,13 +481,13 @@ def draw_plan(image, focus_point, rows, cols, steps):
     return image
 
 
-def select_live_tv(camera, saved=None):
-    """Input 2: click the highlighted item, then the Live TV channel; the planned keys are drawn first.
+def select_plan(camera, step_no, what, saved=None):
+    """Click the highlighted item, then the target; the planned keys are drawn first.
 
     Arrow keys adjust the plan, R starts over, Enter sends exactly the planned keys.
     Returns (route, focus_point, target_point).
     """
-    window_name = "Select Live TV channel"
+    window_name = f"Step {step_no}: select {what}"
     clicks = list(saved or [])
     plan = {'rows': 0, 'cols': 0, 'steps': None, 'tile': None}
 
@@ -502,8 +502,9 @@ def select_live_tv(camera, saved=None):
                 plan['steps'] = None
             clicks.append((x, y))
 
-    print("\n[SETUP] When TV Plus has loaded: click (1) the item that is highlighted now, then (2) the Live TV "
-          "channel. Check the planned moves on screen; arrow keys adjust, R = start over, Enter = go (Q = cancel).")
+    print(f"\n[SETUP] Step {step_no}: when the screen has loaded, click (1) the item that is highlighted now, "
+          f"then (2) {what}. Check the planned moves on screen; arrow keys adjust, R = start over, "
+          "Enter = go (Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
@@ -515,7 +516,7 @@ def select_live_tv(camera, saved=None):
             lines = [("1) Click the item that is HIGHLIGHTED now", (0, 255, 0), 1.0)]
         elif len(clicks) == 1:
             cv2.circle(preview, clicks[0], 10, (255, 255, 255), 3)
-            lines = [("2) Click the Live TV channel to enter", (0, 255, 0), 1.0)]
+            lines = [(f"2) Click {what}", (0, 255, 0), 1.0)]
         else:
             if plan['steps'] is None:
                 replan(frame)
@@ -534,14 +535,14 @@ def select_live_tv(camera, saved=None):
         elif code in (10, 13) and len(clicks) == 2:
             cv2.destroyWindow(window_name)
             route = route_from_plan(plan['rows'], plan['cols'])
-            print(f"[SETUP] Planned keys to the Live TV channel: {describe_route(route)} + OK")
+            print(f"[SETUP] Step {step_no}: planned keys to {what}: {describe_route(route)} + OK")
             return route, clicks[0], clicks[1]
         elif code in (ord('r'), ord('R')):
             clicks.clear()
             plan['steps'] = None
         elif code in (ord('q'), ord('Q')):
             cv2.destroyWindow(window_name)
-            raise KeyboardInterrupt("Live TV selection canceled.")
+            raise KeyboardInterrupt(f"Step {step_no} selection canceled.")
 
 
 def describe_route(route):
@@ -555,12 +556,17 @@ def describe_route(route):
     return ', '.join(f"{key} x{count}" for key, count in parts) or '(no move)'
 
 
-def go_to_live_tv(configuration, camera):
-    """Input 2: plan on screen, then send exactly the planned keys and OK (no camera decisions while moving)."""
-    saved = configuration['channel_clicks'] or None
-    route, focus_point, target_point = select_live_tv(camera, [tuple(p) for p in saved] if saved else None)
-    configuration['channel_clicks'] = [[int(v) for v in focus_point], [int(v) for v in target_point]]
-    configuration['channel_route'] = route
+def plan_step(configuration, camera, step_no, what):
+    """One planned step: plan on screen, then send exactly the planned keys and OK.
+
+    No camera decisions while moving. The clicks and keys are saved per step (plan_steps[step_no]).
+    """
+    saved_steps = configuration['plan_steps']
+    saved = saved_steps.get(str(step_no), {}).get('clicks') or None
+    route, focus_point, target_point = select_plan(camera, step_no, what,
+                                                   [tuple(p) for p in saved] if saved else None)
+    saved_steps[str(step_no)] = {'clicks': [[int(v) for v in focus_point], [int(v) for v in target_point]],
+                                 'route': route}
     save_configuration(CONFIG_FILE, configuration)
     replay_route(route, configuration['manufacturer'], camera)
     send_key('OK', configuration['manufacturer'])
@@ -835,7 +841,9 @@ def main():
         replay_route(route, configuration['manufacturer'], camera)
         send_key('OK', configuration['manufacturer'])
         # Input 2: the Live TV channel inside TV Plus, then OK.
-        go_to_live_tv(configuration, camera)
+        plan_step(configuration, camera, 2, "the Live TV channel")
+        # Input 3: one more step inside Live TV, then OK.
+        plan_step(configuration, camera, 3, "the next item in Live TV")
         roi, motion_threshold = calibrate_playback(configuration, camera, calibration_dir)
 
         results = []
