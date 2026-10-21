@@ -1,9 +1,8 @@
 """Omedia_TC02 - Samsung TV Plus Live TV channel zapping (Ch Up) time.
 
 Setup (two user inputs):
-  1. Home is shown; click Samsung TV Plus (a Live TV card = Down [+ Right], app icon = Down, Down,
-     as in PACE_01). The program moves there and presses OK. If Home stays on screen, click the
-     tile again on that view.
+  1. Home is shown; click Samsung TV Plus. The camera walks the focus there (or finish with the
+     arrow keys) and OK opens it. If Home stays on screen, click the tile again on that view.
   2. The opened TV Plus screen is captured; click the Live TV channel to enter. The camera walks the
      focus there (or move it with the keyboard arrow keys), then OK enters the channel.
   The middle of the playing picture is used to detect playback; its motion sets the threshold.
@@ -59,9 +58,6 @@ RAW_IR_KEYSETS = {
 APP_NAME = "Samsung TV Plus"
 CAMERA_INDEX = 1
 CAPTURE_WINDOW = "Omedia_TC02 Capture"
-# Home layout used to turn a click into a D-pad route (fractions of the camera frame, PACE_01 framing)
-CARD_ROW_LEFT, CARD_ROW_TOP, CARD_ROW_BOTTOM, ICON_ROW_BOTTOM = 0.09, 0.47, 0.68, 0.78
-CARD_WIDTH, ICON_WIDTH = 0.26, 0.09
 HOME_READY_SIMILARITY = 0.6     # pre-check: Home with TV Plus focused must still match this well
 MIN_MOTION_THRESHOLD = 2.0      # mean gray-level change per frame inside the live video area
 MOTION_THRESHOLD_RATIO = 0.4    # streaming = motion of at least 40% of the measured playing motion
@@ -306,27 +302,10 @@ def screen_similarity(frame, reference):
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
-# ---------- calibration: route to Samsung TV Plus (same as PACE_01) ----------
+# ---------- input 1: where Samsung TV Plus is on Home ----------
 
-def route_for_click(point, frame_shape):
-    """D-pad route from Home for a click on a Live TV card or an app icon (PACE_01 layout).
-
-    The first Live TV card (x 0.09-0.35, y 0.47-0.68) is Down; each card to its right adds one Right.
-    The first app icon (x 0.09-0.18, y 0.68-0.78) is Down, Down; each icon to its right adds one Right.
-    """
-    x_ratio = point[0] / frame_shape[1]
-    y_ratio = point[1] / frame_shape[0]
-    if x_ratio < CARD_ROW_LEFT:
-        return None
-    if CARD_ROW_TOP <= y_ratio <= CARD_ROW_BOTTOM:
-        return ['Down'] + ['Right'] * int((x_ratio - CARD_ROW_LEFT) // CARD_WIDTH)
-    if CARD_ROW_BOTTOM < y_ratio <= ICON_ROW_BOTTOM:
-        return ['Down', 'Down'] + ['Right'] * int((x_ratio - CARD_ROW_LEFT) // ICON_WIDTH)
-    return None
-
-
-def select_app_route(camera, saved_point=None):
-    """Show Home, let the user click Samsung TV Plus, and return (route, point)."""
+def select_home_target(camera, saved_point=None):
+    """Show Home and let the user click Samsung TV Plus. Returns the clicked point (frame pixels)."""
     window_name = f"Select {APP_NAME}"
     selection = {'point': tuple(saved_point) if saved_point else None}
 
@@ -334,7 +313,7 @@ def select_app_route(camera, saved_point=None):
         if event == cv2.EVENT_LBUTTONDOWN:
             selection['point'] = (x, y)
 
-    print("\n[SETUP] Click the Live TV card (or the Samsung TV Plus app icon) to open, then press Enter (Q = cancel).")
+    print(f"\n[SETUP] Click {APP_NAME} on the Home screen, then press Enter (Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
@@ -342,21 +321,19 @@ def select_app_route(camera, saved_point=None):
         if frame is None:
             continue
         preview = frame.copy()
-        route = route_for_click(selection['point'], frame.shape) if selection['point'] else None
         if selection['point'] is None:
             lines = [(f"Click {APP_NAME}, then press ENTER", (0, 255, 0), 1.0)]
-        elif route:
-            lines = [(f"{APP_NAME} selected: {', '.join(route)} + OK.  ENTER = go", (0, 255, 0), 1.0)]
         else:
-            lines = [("Click a Live TV card or the app icon", (0, 0, 255), 1.0)]
-        if selection['point'] is not None:
-            cv2.circle(preview, selection['point'], 12, (0, 255, 0) if route else (0, 0, 255), 3)
+            cv2.drawMarker(preview, selection['point'], (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
+            cv2.circle(preview, selection['point'], 16, (0, 255, 0), 2)
+            same = saved_point and tuple(selection['point']) == tuple(saved_point)
+            lines = [("ENTER = go to the marked spot (saved),  or click another" if same
+                      else "ENTER = go there,  click again to change", (0, 255, 0), 1.0)]
         cv2.imshow(window_name, draw_overlay(preview, lines))
         key = cv2.waitKey(30) & 0xFF
-        if key in (10, 13) and route:
+        if key in (10, 13) and selection['point'] is not None:
             cv2.destroyWindow(window_name)
-            print(f"[SETUP] Route to {APP_NAME}: {', '.join(route)} + OK")
-            return route, selection['point']
+            return selection['point']
         if key == ord('q'):
             cv2.destroyWindow(window_name)
             raise KeyboardInterrupt(f"{APP_NAME} selection canceled.")
@@ -383,11 +360,17 @@ def replay_route(route, manufacturer, camera):
             cv2.waitKey(1)
 
 
-def calibrate_route(configuration, camera):
-    """Home first, then the user clicks Samsung TV Plus; the click decides the D-pad route."""
-    press_home(configuration['manufacturer'], camera)
+def calibrate_route(configuration, camera, calibration_dir):
+    """Home -> user clicks Samsung TV Plus -> the camera walks the focus there. Ends with it focused."""
+    manufacturer = configuration['manufacturer']
+    press_home(manufacturer, camera)
     saved_point = configuration['target_point'] or None
-    route, point = select_app_route(camera, saved_point)
+    point = select_home_target(camera, saved_point)
+    if saved_point and tuple(point) == tuple(saved_point) and configuration['route']:
+        print(f"[SETUP] Using the saved route to {APP_NAME}: {', '.join(configuration['route'])}")
+        replay_route(configuration['route'], manufacturer, camera)
+        return configuration['route']
+    route = move_to_point(configuration, camera, point, APP_NAME, os.path.join(calibration_dir, "nav_home"))
     configuration['route'] = route
     configuration['target_point'] = [int(point[0]), int(point[1])]
     save_configuration(CONFIG_FILE, configuration)
@@ -435,15 +418,11 @@ def grab_still(camera, label=None):
 
 
 def open_clicked_live_tv(configuration, camera, point, frame_shape, context):
-    """Go to the tile the user clicked on the Home view and press OK; remember it for later."""
-    route = route_for_click(point, frame_shape)
-    if route is None:
-        print("[SETUP] That spot is not a Live TV card or app icon; click a card in the row under the banner.")
-        return
+    """Home stayed on screen: walk the focus to the tile the user clicked on that view and press OK."""
     manufacturer = configuration['manufacturer']
-    print(f"[SETUP] Opening the clicked tile: Home -> {', '.join(route)} -> OK")
+    print("[SETUP] Going to the clicked tile on Home and pressing OK.")
     press_home(manufacturer, camera)
-    replay_route(route, manufacturer, camera)
+    route = move_to_point(configuration, camera, point, "the tile", context.get('nav_dir'))
     context['home_ready'] = capture_home_ready(camera)
     configuration['route'] = route
     configuration['target_point'] = [int(point[0]), int(point[1])]
@@ -563,8 +542,11 @@ def keyboard_drive(configuration, camera, pressed):
             return pressed
 
 
-def choose_channel(configuration, camera, calibration_dir, screen):
-    """Click the channel; the camera walks the focus there. Returns every key pressed (replayable)."""
+def move_to_point(configuration, camera, point, what, debug_dir=None):
+    """The camera walks the focus to the clicked point; the user confirms or finishes with arrow keys.
+
+    Returns every key pressed (replaying them from the same start lands on the same tile).
+    """
     manufacturer = configuration['manufacturer']
     pressed = []
 
@@ -572,11 +554,9 @@ def choose_channel(configuration, camera, calibration_dir, screen):
         send_key(key, manufacturer)
         pressed.append(key)
 
-    point = click_channel(screen)
-    debug_dir = os.path.join(calibration_dir, "nav_steps")
     focus_box = None
     try:
-        _, frame, focus_box = nav.navigate_to_target(press, lambda: grab_still(camera, "Moving to the channel..."),
+        _, frame, focus_box = nav.navigate_to_target(press, lambda: grab_still(camera, f"Moving to {what}..."),
                                                      point, debug_dir=debug_dir)
     except RuntimeError as error:
         print(f"[SETUP] Automatic move failed: {error}")
@@ -587,13 +567,21 @@ def choose_channel(configuration, camera, calibration_dir, screen):
         x, y, w, h = focus_box
         cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 3)
     cv2.drawMarker(preview, tuple(int(v) for v in point), (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
-    cv2.imshow("Channel check", draw_overlay(preview, [("Is the channel focused?  Answer in the console", (0, 255, 255), 1.0)]))
+    cv2.imshow("Focus check", draw_overlay(preview, [(f"Is {what} focused?  Answer in the console", (0, 255, 255), 1.0)]))
     cv2.waitKey(1)
-    answer = input("Is the Live TV channel focused? (Y = enter it / k = move with arrow keys): ").strip().lower()
-    cv2.destroyWindow("Channel check")
+    answer = input(f"Is {what} focused? (Y = yes / k = move with arrow keys): ").strip().lower()
+    cv2.destroyWindow("Focus check")
     if answer == 'k':
         keyboard_drive(configuration, camera, pressed)
-    print(f"[SETUP] Channel route inside {APP_NAME}: {', '.join(pressed) or '(no move)'} + OK")
+    print(f"[SETUP] Keys to {what}: {', '.join(pressed) or '(no move)'}")
+    return pressed
+
+
+def choose_channel(configuration, camera, calibration_dir, screen):
+    """Click the channel on the captured TV Plus screen; the camera walks the focus there."""
+    point = click_channel(screen)
+    pressed = move_to_point(configuration, camera, point, "the Live TV channel",
+                            os.path.join(calibration_dir, "nav_channel"))
     return pressed, point
 
 
@@ -882,9 +870,8 @@ def main():
         os.makedirs(calibration_dir, exist_ok=True)
 
         # Input 1: where Samsung TV Plus is on Home.
-        route = calibrate_route(configuration, camera)
-        replay_route(route, configuration['manufacturer'], camera)
-        context = {'home_ready': capture_home_ready(camera)}
+        calibrate_route(configuration, camera, calibration_dir)      # ends with TV Plus focused
+        context = {'home_ready': capture_home_ready(camera), 'nav_dir': os.path.join(calibration_dir, "nav_reopen")}
         send_key('OK', configuration['manufacturer'])
         # Input 2: which Live TV channel to enter inside TV Plus.
         roi, motion_threshold = enter_live_channel(configuration, camera, calibration_dir, context)
