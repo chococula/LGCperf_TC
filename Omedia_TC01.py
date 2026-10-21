@@ -247,10 +247,30 @@ class CameraFrameCapture:
 
 
 def draw_overlay(frame, lines):
-    for line_idx, (text, color, scale) in enumerate(lines):
-        y = 50 + line_idx * 55
-        cv2.putText(frame, text, (15, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 6)
-        cv2.putText(frame, text, (15, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
+    # Sizes are tuned for 1280 px wide frames and scaled to the actual camera resolution.
+    # Text sits on a translucent dark box so it stays readable on bright or dark screens.
+    ratio = max(frame.shape[1] / 1280.0, 0.5)
+    pad = round(12 * ratio)
+    thickness = max(1, round(2 * ratio))
+    layout = []
+    y = pad
+    width = 0
+    for text, color, scale in lines:
+        scale *= ratio
+        (text_width, text_height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+        y += text_height
+        layout.append((text, color, scale, y))
+        y += baseline + round(10 * ratio)
+        width = max(width, text_width)
+    if not layout:
+        return frame
+
+    box_right = min(frame.shape[1], 2 * pad + width)
+    box_bottom = min(frame.shape[0], y + pad - round(10 * ratio))
+    region = frame[0:box_bottom, 0:box_right]
+    region[:] = (region * 0.35).astype(region.dtype)
+    for text, color, scale, line_y in layout:
+        cv2.putText(frame, text, (pad, line_y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
     return frame
 
 
