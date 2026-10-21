@@ -176,7 +176,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b6</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b7</p>
 </div>
 
 <script>
@@ -232,8 +232,8 @@ function call(name, args, onOk) {
   } else if (API_URL) {
     apiCall(name, args).then(onOk, onFail);
   } else {
-    const shared = name === 'getResults' ? sharedLocal() : null;
-    try { onOk(shared ? shared.data : demoServer[name](...args)); } catch (error) { onFail(error); }
+    if (name === 'getResults') { offlineData().then(onOk, onFail); return; }
+    try { onOk(demoServer[name](...args)); } catch (error) { onFail(error); }
   }
 }
 
@@ -254,6 +254,36 @@ async function apiCall(name, args) {
   return name === 'getResults' ? json.data : name === 'setExcluded' ? json.row : true;
 }
 
+// Without the Google Sheet: use data.json published with the site, unless the data editor in this
+// browser has a newer CSV open. Fall back to sample data when neither exists.
+async function loadPublished() {
+  try {
+    const response = await fetch('data.json', { cache: 'no-store' });
+    if (!response.ok) return null;
+    const json = await response.json();
+    return json && json.data ? json : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function offlineData() {
+  const published = await loadPublished();
+  const shared = sharedLocal();
+  const sharedTime = shared ? Date.parse(String(shared.savedAt).replace(' ', 'T')) || 0 : 0;
+  const publishedTime = published ? Date.parse(published.publishedAt) || 0 : 0;
+  if (shared && (!published || sharedTime > publishedTime)) {
+    state.source = { kind: 'local', name: shared.name, at: shared.savedAt };
+    return shared.data;
+  }
+  if (published) {
+    state.source = { kind: 'published', at: new Date(publishedTime).toLocaleString() };
+    return published.data;
+  }
+  state.source = { kind: 'sample' };
+  return demoServer.getResults();
+}
+
 function load() {
   if (state.editingRow) return;  // don't wipe an exclusion being typed
   call('getResults', [], onData);
@@ -263,15 +293,17 @@ function onData(data) {
   state.data = data || {};
   const tcs = Object.keys(state.data);
   if (!state.tc || !state.data[state.tc]) state.tc = tcs[0] || null;
-  const shared = LIVE ? null : sharedLocal();
+  const source = state.source || {};
   document.getElementById('updated').innerHTML = LIVE
     ? '<span class="status-dot"></span>Updated ' + new Date().toLocaleTimeString() + ' · auto-refresh 30 s'
-    : shared
-      ? `<span class="status-dot"></span>Local file ${esc(shared.name)} · from the data editor, ${esc(shared.savedAt)} ` +
-        '<button class="btn" id="show-sample">Show sample data</button>'
-      : 'Sample data · open your CSV in the data editor to see it here';
-  const sampleButton = document.getElementById('show-sample');
-  if (sampleButton) sampleButton.onclick = () => { try { localStorage.removeItem(SHARED_KEY); } catch (e) {} load(); };
+    : source.kind === 'local'
+      ? `<span class="status-dot"></span>Local file ${esc(source.name)} · from the data editor, ${esc(source.at)} ` +
+        '<button class="btn" id="show-published">Show published results</button>'
+      : source.kind === 'published'
+        ? `<span class="status-dot"></span>Published results · updated ${esc(source.at)}`
+        : 'Sample data · open your CSV in the data editor to see it here';
+  const publishedButton = document.getElementById('show-published');
+  if (publishedButton) publishedButton.onclick = () => { try { localStorage.removeItem(SHARED_KEY); } catch (e) {} load(); };
   renderAdmin();
   renderTabs(tcs);
   renderFilters();
@@ -283,7 +315,7 @@ function onData(data) {
 function renderAdmin() {
   const box = document.getElementById('admin');
   if (!LIVE) {
-    box.innerHTML = sharedLocal() ? '<span>Exclude, edit, or delete runs in the data editor.</span>' : '';
+    box.innerHTML = state.source && state.source.kind === 'local' ? '<span>Exclude, edit, or delete runs in the data editor.</span>' : '';
     return;
   }
   const error = state.error ? `<span class="toast">${esc(state.error)}</span>` : '';

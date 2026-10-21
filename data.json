@@ -1,0 +1,62 @@
+{
+ "publishedAt": "2026-10-21T07:25:26+00:00",
+ "data": {
+  "Omedia_TC01": [
+   {
+    "TC": "Omedia_TC01",
+    "Run": "1",
+    "Timestamp": "20261020_235027",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "2565.82",
+    "Frames": "89",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_01_20261020_235027_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-1"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "2",
+    "Timestamp": "20261020_235535",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "2628.05",
+    "Frames": "136",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_02_20261020_235535_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-2"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "3",
+    "Timestamp": "20261021_000044",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "2566.45",
+    "Frames": "153",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_03_20261021_000044_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-3"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "4",
+    "Timestamp": "20261021_000554",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "2628.62",
+    "Frames": "117",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_04_20261021_000554_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-4"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "5",
+    "Timestamp": "20261021_001102",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "2627.14",
+    "Frames": "154",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-5"
+   }
+  ]
+ }
+}
