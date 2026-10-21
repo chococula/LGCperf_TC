@@ -92,6 +92,7 @@
   .badge { display: inline-block; padding: 1px 8px; border-radius: 4px; font: 600 11px var(--font-body); letter-spacing: .06em; }
   .badge.PASS { color: var(--pass); background: var(--pass-bg); }
   .badge.FAIL { color: var(--fail); background: var(--fail-bg); }
+  .badge.INVALID { color: var(--warn); background: var(--warn-bg); }
   .empty { padding: 40px; text-align: center; color: var(--muted); }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pass); margin-right: 6px; }
   .filters input[type="date"] { font: 13px var(--font-body); padding: 5px 8px; border: 1px solid var(--line);
@@ -169,7 +170,7 @@
 
   <div class="panel">
     <h2>All Runs <span class="muted" id="row-count"></span></h2>
-    <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value far from its build's median; it is a hint only.</p>
+    <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value far from its build's median; it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
 </div>
@@ -372,7 +373,7 @@ function render() {
   const metric = state.metric;
   const rows = filteredRows();
   const included = rows.filter(r => !isExcluded(r));
-  const statRows = included.filter(r => r.Status !== 'FAIL');
+  const statRows = included.filter(r => r.Status === 'PASS');
   const outliers = outlierSet(statRows, metric);
   const values = statRows.map(r => num(r[metric])).filter(v => v != null);
   renderCards(rows, included, statRows, outliers, stats(values));
@@ -383,7 +384,8 @@ function render() {
 }
 
 function renderCards(rows, included, statRows, outliers, s) {
-  const passRate = included.length ? (statRows.length / included.length) * 100 : null;
+  const judged = included.filter(r => r.Status === 'PASS' || r.Status === 'FAIL');
+  const passRate = judged.length ? (statRows.length / judged.length) * 100 : null;
   const latest = statRows[statRows.length - 1];
   const cards = [
     ['Runs used', fmt(statRows.length), `of ${fmt(rows.length)}`],

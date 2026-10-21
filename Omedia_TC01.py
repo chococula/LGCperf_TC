@@ -330,11 +330,48 @@ class FrameWriter:
         self.thread.join()
 
 
+def home_similarity(frame, reference):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
+        raise RuntimeError("Camera frame is smaller than the saved Home reference.")
+    return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
+
+
+def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, seconds=1.0):
+    """Before Power ON, confirm the screen does not already match Home (i.e. the TV really is off)."""
+    frame_capture.clear_buffer()
+    max_score = None
+    last_frame = None
+    end_at = time.perf_counter() + seconds
+    while time.perf_counter() < end_at or max_score is None:
+        captured = frame_capture.get_frame(timeout=1.0)
+        if captured is None:
+            if time.perf_counter() > end_at + 2.0:
+                raise RuntimeError("No camera frames during the TV-off check.")
+            continue
+        _, frame = captured
+        score = home_similarity(frame, reference)
+        max_score = score if max_score is None else max(max_score, score)
+        last_frame = frame
+
+    tv_off = max_score < similarity_threshold
+    draw_overlay(last_frame, [
+        (f"PRE-CHECK  similarity {max_score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
+        ("TV OFF - OK" if tv_off else "TV NOT OFF - RUN INVALID", (0, 255, 0) if tv_off else (0, 0, 255), 1.2),
+    ])
+    cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_POWER_ON.jpg"), last_frame)
+    cv2.imshow(CAPTURE_WINDOW, last_frame)
+    cv2.waitKey(1)
+    return tv_off, max_score
+
+
 def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                       similarity_threshold, power_on_at):
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
+    armed = False
     detected_elapsed_ms = None
     frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
 
@@ -351,23 +388,30 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 continue
 
             frame_count += 1
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-            if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
-                raise RuntimeError("Camera frame is smaller than the saved Home reference.")
-
-            match = cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)
-            score = float(np.max(match))
+            score = home_similarity(frame, reference)
             elapsed_ms = (captured_at - power_on_at) * 1000.0
             last_elapsed_ms = elapsed_ms
-            frame_writer.save(
-                f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg", frame.copy()
-            )
-
-            newly_detected = not detected and score >= similarity_threshold
+            # Only count a Home match after at least one frame below the threshold (TV off / booting),
+            # so a stale buffered frame or a TV that never turned off cannot pass instantly.
+            if score < similarity_threshold:
+                armed = True
+            newly_detected = armed and not detected and score >= similarity_threshold
             if newly_detected:
                 detected = True
                 detected_elapsed_ms = elapsed_ms
+
+            # Saved frames show this frame's own elapsed time from Power ON and its similarity.
+            saved_color = (0, 255, 0) if score >= similarity_threshold else (0, 255, 255)
+            saved_overlay = [
+                (f"RUN {run_idx}  #{frame_count}  TIMER {elapsed_ms / 1000.0:.3f} s", saved_color, 1.4),
+                (f"Similarity {score:.3f} / {similarity_threshold:.3f}", saved_color, 1.0),
+            ]
+            if detected:
+                saved_overlay.append((f"HOME DETECTED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+            frame_writer.save(
+                f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
+                draw_overlay(frame.copy(), saved_overlay),
+            )
 
             shown_ms = detected_elapsed_ms if detected else elapsed_ms
             status_color = (0, 255, 0) if detected else (0, 255, 255)
@@ -392,7 +436,7 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 winsound.Beep(1500, 250)
                 winsound.Beep(2500, 350)
 
-            if score >= FRAME_CAPTURE_SIMILARITY:
+            if detected and score >= FRAME_CAPTURE_SIMILARITY:
                 print(f"[RUN {run_idx}] Similarity {score:.3f} reached {FRAME_CAPTURE_SIMILARITY:.2f}; "
                       f"frame capture stopped at {elapsed_ms:.2f} ms.")
                 break
@@ -410,7 +454,7 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
 
     return {
         'run': run_idx,
-        'detected': detected,
+        'status': 'PASS' if detected else 'FAIL',
         'response_time_ms': last_elapsed_ms,
         'frame_count': frame_count,
         'directory': output_dir,
@@ -456,20 +500,39 @@ def main():
 
             frame_capture = CameraFrameCapture(camera)
             frame_capture.start()
-            frame_capture.clear_buffer()
-            print("STEP 3: Send remote Power to turn the TV ON; measurement starts now.")
-            power_on_at = send_key('Power', configuration['manufacturer'])
-            winsound.Beep(1500, 300)
             try:
-                result = measure_home_time(
-                    frame_capture,
-                    reference,
-                    run_idx,
-                    output_dir,
-                    configuration['timeout'],
-                    configuration['home_similarity_threshold'],
-                    power_on_at,
+                tv_off, precheck_score = check_tv_off(
+                    frame_capture, reference, configuration['home_similarity_threshold'], output_dir
                 )
+                if not tv_off:
+                    print(
+                        f"[RUN {run_idx}] INVALID: the screen already matches Home (similarity "
+                        f"{precheck_score:.3f}) before Power ON, so the TV did not turn off. "
+                        "Skipping this run; the next run's Power OFF should restore the state."
+                    )
+                    winsound.Beep(400, 300)
+                    winsound.Beep(400, 300)
+                    result = {
+                        'run': run_idx,
+                        'status': 'INVALID',
+                        'response_time_ms': None,
+                        'frame_count': 0,
+                        'directory': output_dir,
+                    }
+                else:
+                    frame_capture.clear_buffer()
+                    print("STEP 3: Send remote Power to turn the TV ON; measurement starts now.")
+                    power_on_at = send_key('Power', configuration['manufacturer'])
+                    winsound.Beep(1500, 300)
+                    result = measure_home_time(
+                        frame_capture,
+                        reference,
+                        run_idx,
+                        output_dir,
+                        configuration['timeout'],
+                        configuration['home_similarity_threshold'],
+                        power_on_at,
+                    )
             finally:
                 frame_capture.stop()
 
@@ -479,9 +542,11 @@ def main():
                 'Run': result['run'],
                 'Timestamp': timestamp,
                 'Standby_Seconds': STANDBY_SECONDS,
-                'Home_Time_ms': round(result['response_time_ms'], 2),
+                'Home_Time_ms': (
+                    round(result['response_time_ms'], 2) if result['response_time_ms'] is not None else None
+                ),
                 'Frames': result['frame_count'],
-                'Status': 'PASS' if result['detected'] else 'FAIL',
+                'Status': result['status'],
                 'Directory': result['directory'],
             }
             pd.DataFrame([row]).to_csv(
@@ -506,7 +571,10 @@ def main():
                 'Status': row['Status'],
             })
 
-        passed = sum(result['detected'] for result in results)
+        passed = sum(result['status'] == 'PASS' for result in results)
+        invalid = sum(result['status'] == 'INVALID' for result in results)
+        if invalid:
+            print(f"{invalid} run(s) were INVALID because the TV was not off before Power ON.")
         print(f"\nOmedia_TC01 complete: {passed}/{len(results)} runs passed.")
         for frequency in (1500, 2000, 2500):
             winsound.Beep(frequency, 200)
