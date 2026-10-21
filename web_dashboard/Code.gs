@@ -7,6 +7,7 @@
 // POST { action: 'exclude', key, tc, ids, excluded, reason } -> flag rows excluded / restored
 // POST { action: 'update',  key, tc, changes: [{ id, values: { column: value } }] } -> edit cells
 // POST { action: 'delete',  key, tc, ids }              -> move rows to the _Deleted tab
+// POST { action: 'add',     key, tc, row }              -> append a row by hand (or undo a delete)
 
 // Must match "token" in result_upload_config.json on the test PC.
 const UPLOAD_TOKEN = 'CHANGE_ME';
@@ -37,6 +38,8 @@ function doPost(e) {
         return jsonResponse({ ok: true, updated: updateRows(body.tc, body.changes, body.key) });
       case 'delete':
         return jsonResponse({ ok: true, deleted: deleteRows(body.tc, body.ids, body.key) });
+      case 'add':
+        return jsonResponse({ ok: true, id: addRow(body.tc, body.row, body.key) });
     }
 
     if (body.token !== UPLOAD_TOKEN) {
@@ -131,6 +134,22 @@ function deleteRows(tc, ids, key) {
     });
     rowNumbers.forEach(function (rowNumber) { sheet.deleteRow(rowNumber); });
     return rowNumbers.length;
+  });
+}
+
+function addRow(tc, row, key) {
+  checkAdminKey(key);
+  const name = String(tc || row.TC || '').replace(/[^\w.-]/g, '_');
+  if (!name || name.charAt(0) === '_') throw new Error('Choose a TC for the new row.');
+  return withLock(function () {
+    const sheet = getOrCreateSheet(name);
+    const header = ensureRowIds(sheet);
+    const record = Object.assign({}, row);
+    // Keep the given Row_ID only when restoring a deleted row whose ID is not in use.
+    if (!record[ID_COLUMN] || rowNumbersById(sheet, header)[record[ID_COLUMN]]) record[ID_COLUMN] = Utilities.getUuid();
+    if (!record.Uploaded_At) record.Uploaded_At = new Date();
+    appendRecord(sheet, record);
+    return record[ID_COLUMN];
   });
 }
 
