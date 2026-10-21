@@ -36,7 +36,7 @@
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-body); }
-  .wrap { max-width: 1280px; margin: 0 auto; padding-block: 24px 48px;
+  .wrap { max-width: 1600px; margin: 0 auto; padding-block: 24px 48px;
           padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
           display: flex; flex-direction: column; gap: 16px; }
   header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; }
@@ -70,7 +70,8 @@
   .panel h2 .muted { font: 12px var(--font-mono); }
   .grid2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; }
   @media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
-  .chart { width: 100%; overflow-x: auto; }
+  .chart { width: 100%; }
+  .chart svg { display: block; max-width: 100%; }
   svg text { fill: var(--muted); font: 11px var(--font-mono); }
   .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; }
   .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
@@ -84,6 +85,9 @@
   @media (max-width: 900px) { .table-wrap { overflow-x: auto; } }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { padding: 7px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { white-space: normal; }
+  /* Long folder paths wrap inside their cell instead of widening the page. */
+  td.wrap-cell { white-space: normal; word-break: break-all; min-width: 220px; }
   td { font: 13px var(--font-mono); }
   th { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
        position: sticky; top: 0; background: var(--panel); }
@@ -185,7 +189,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b9</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b11</p>
 </div>
 
 <dialog id="player">
@@ -199,8 +203,7 @@
 <script>
 const REFRESH_MS = 30000;
 const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
-// Directory and TC are left out: the download file names already carry the run folder name.
-const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'Directory', 'TC'];
+const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
@@ -488,7 +491,8 @@ function renderTrend(rows, metric, outliers) {
 
   const builds = [...new Set(points.map(p => buildKey(p.r)))];
   const color = b => cssVar(SERIES_COLORS[builds.indexOf(b) % SERIES_COLORS.length]);
-  const W = Math.max(640, points.length * 14 + 80), H = 260, L = 56, R = 14, T = 12, B = 28;
+  // Draw at the panel's own width so the chart never needs a horizontal scrollbar.
+  const W = Math.max(280, Math.floor(box.clientWidth) || 640), H = 260, L = 56, R = 14, T = 12, B = 28;
   const maxV = Math.max(...points.map(p => p.v)) * 1.1 || 1;
   const x = i => L + (points.length === 1 ? (W - L - R) / 2 : (i / (points.length - 1)) * (W - L - R));
   const y = v => T + (1 - v / maxV) * (H - T - B);
@@ -539,14 +543,10 @@ function renderBuilds(statRows, metric) {
   }).join('');
 }
 
-// Recording links: Play opens the MP4 in a dialog; MP4 and GIF download the files.
+// Recording: Play opens the run video in a dialog.
 function recordingCell(r) {
-  if (!r.Video && !r.GIF) return '<span class="muted">–</span>';
-  const name = `${state.tc}_run${r.Run}_${r.Timestamp}`;
-  return '<div class="rec">' +
-    (r.Video ? `<button class="btn" data-play="${esc(r.Video)}" data-title="Run ${esc(r.Run)} · ${esc(r.Timestamp)}" data-gif="${esc(r.GIF || '')}" data-name="${esc(name)}">▶ Play</button>` +
-               `<a class="btn" href="${esc(r.Video)}" download>↓ MP4</a>` : '') +
-    (r.GIF ? `<a class="btn" href="${esc(r.GIF)}" download>↓ GIF</a>` : '') + '</div>';
+  if (!r.Video) return '<span class="muted">–</span>';
+  return `<button class="btn" data-play="${esc(r.Video)}" data-title="Run ${esc(r.Run)} · ${esc(r.Timestamp)}">▶ Play</button>`;
 }
 
 function openPlayer(button) {
@@ -554,8 +554,6 @@ function openPlayer(button) {
   const video = document.getElementById('player-video');
   document.getElementById('player-title').textContent = button.dataset.title;
   document.getElementById('player-links').innerHTML =
-    `<a class="btn" href="${esc(button.dataset.play)}" download>↓ MP4</a>` +
-    (button.dataset.gif ? `<a class="btn" href="${esc(button.dataset.gif)}" download>↓ GIF</a>` : '') +
     '<button class="btn" id="player-close">Close</button>';
   document.getElementById('player-close').onclick = () => dialog.close();
   video.src = button.dataset.play;
@@ -588,6 +586,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
       if (c === 'Recording') return `<td>${recordingCell(r)}</td>`;
       const n = num(r[c]);
       if (c === metric) return `<td class="num metric"><b>${fmt(n, 2)}</b></td>`;
+      if (c === 'Directory') return `<td class="wrap-cell">${esc(r[c])}</td>`;
       return n != null && !['Timestamp', 'SWV', 'LGCV', 'Session'].includes(c)
         ? `<td class="num">${esc(r[c])}</td>` : `<td>${esc(r[c])}</td>`;
     }).join('');
@@ -661,6 +660,8 @@ renderAdmin();
 load();
 setInterval(load, REFRESH_MS);
 window.addEventListener('storage', e => { if (e.key === SHARED_KEY) load(); });
+let resizeTimer = null;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
 </script>
 </body>
 </html>
