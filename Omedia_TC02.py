@@ -1,4 +1,4 @@
-"""Omedia_TC02 - Samsung TV Plus Live TV channel zapping (Ch Up) time.
+"""Omedia_TC02 - Samsung TV Plus Live TV channel change time.
 
 Setup (three inputs, each a click on the live camera view, then Enter):
   1. Home: click the Samsung TV Plus card (Down) or its bottom app icon (Down, Down), as in PACE_01; OK.
@@ -7,7 +7,9 @@ Setup (three inputs, each a click on the live camera view, then Enter):
   3. Live TV: the same as step 2 for one more item, then OK.
   The middle of the playing picture is used to detect playback; its motion sets the threshold.
 Each run:
-  2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
+  Guide method (Samsung, where Ch Up/Down does not work): OK, OK opens the GUIDE, Down moves to the
+  next channel, 2 s pre-roll, then OK starts the timer -> stop when the new channel's picture appears.
+  Ch Up method: 2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
   3 consecutive moving frames after the picture went black/frozen. Frames, MP4/GIF, CSV row
   (Zap_Time_ms), and upload are the same as Omedia_TC01.
 """
@@ -39,6 +41,7 @@ DEFAULT_CONFIGURATION = {
     'num_runs': 5,
     'timeout': 15.0,
     'zap_interval_seconds': 8,
+    'zap_method': 'Guide',
     'route': [],
     'target_point': [],
     'plan_steps': {},
@@ -60,7 +63,9 @@ MOTION_THRESHOLD_RATIO = 0.4    # streaming = motion of at least 40% of the meas
 MIN_STREAM_BRIGHTNESS = 20      # a black screen is not streaming
 STREAM_CONFIRM_FRAMES = 3       # consecutive moving frames needed; the first one is the start time
 STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
-MIN_STILL_FRAMES = 2            # after Ch Up the picture must stop (black/frozen) this many frames first
+MIN_STILL_FRAMES = 2            # after the key the picture must stop (black/frozen) this many frames first
+GUIDE_KEY_GAP_SECONDS = 1.0     # Guide method: wait between OK, OK and Down
+GUIDE_OPEN_SECONDS = 2.0        # Guide method: wait for the GUIDE to open after the second OK
 ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
 TILE_STEP_RATIO = 1.15         # fallback step (tile size + gap) when the next tile cannot be measured
 PRE_ROLL_SECONDS = 2.0
@@ -85,7 +90,7 @@ def ask_number(prompt, default, cast, valid):
 def get_user_configuration():
     defaults = load_saved_configuration(CONFIG_FILE, DEFAULT_CONFIGURATION)
     print("\n" + "=" * 60)
-    print(f"  Omedia_TC02 - {APP_NAME} Live TV Channel Zapping (Ch Up)")
+    print(f"  Omedia_TC02 - {APP_NAME} Live TV Channel Change")
     print("=" * 60)
 
     while True:
@@ -100,8 +105,16 @@ def get_user_configuration():
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
     num_runs = ask_number("Enter number of runs", defaults['num_runs'], int, lambda v: v > 0)
     timeout = ask_number("Enter zap timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
-    zap_interval_seconds = ask_number("Enter seconds to watch each channel before the next Ch Up",
+    zap_interval_seconds = ask_number("Enter seconds to watch each channel before the next change",
                                       defaults['zap_interval_seconds'], int, lambda v: v >= 0)
+    default_method = 'Guide' if manufacturer == 'Samsung' else defaults['zap_method']
+    while True:
+        zap_method = input("Channel change method: Guide (OK, OK, Down, OK) or ChUp "
+                           f"(default: {default_method}): ").strip() or default_method
+        zap_method = {'guide': 'Guide', 'chup': 'ChUp'}.get(zap_method.lower())
+        if zap_method:
+            break
+        print("Choose Guide or ChUp.")
 
     configuration = dict(defaults)
     configuration.update({
@@ -112,9 +125,10 @@ def get_user_configuration():
         'num_runs': num_runs,
         'timeout': timeout,
         'zap_interval_seconds': zap_interval_seconds,
+        'zap_method': zap_method,
     })
     print("\nConfiguration:")
-    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds'):
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds', 'zap_method'):
         print(f"  {key}: {configuration[key]}")
     if configuration['route']:
         print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
@@ -666,13 +680,13 @@ def check_playing(frame_capture, roi, motion_threshold, output_dir, seconds=PRE_
 
 
 def measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, timeout,
-                     key_pressed_at, pre_frames=(), last_roi=None):
+                     key_pressed_at, pre_frames=(), last_roi=None, key_label="CH UP", start_still=0):
     """Time from Ch Up until the new channel plays: after a blank/frozen picture, sustained motion again."""
     x, y, w, h = roi
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
-    still_frames = 0            # consecutive frames with no playback (black or frozen)
+    still_frames = start_still  # consecutive frames with no playback (black or frozen)
     streak = 0
     candidate_ms = None
     detected_elapsed_ms = None
@@ -694,7 +708,7 @@ def measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, 
         pre_index += 1
         frame_writer.save(
             f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim0.000.jpg",
-            annotate(frame, [(f"RUN {run_idx}  BEFORE CH UP  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
+            annotate(frame, [(f"RUN {run_idx}  BEFORE {key_label}  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
         )
 
     print(f"[RUN {run_idx}] Waiting for the new channel to play (motion >= {motion_threshold:.1f} for "
@@ -788,7 +802,60 @@ def invalid_result(run_idx, output_dir, reason):
             'directory': output_dir, 'reason': reason}
 
 
+def capture_pre_roll(frame_capture, roi, seconds=PRE_ROLL_SECONDS):
+    """Frames for the video pre-roll (no check); returns them, the last area image, and the median motion."""
+    frame_capture.clear_buffer()
+    pre_frames, motions, previous = [], [], None
+    end_at = time.perf_counter() + seconds
+    while time.perf_counter() < end_at or not pre_frames:
+        captured = frame_capture.get_frame(timeout=1.0)
+        if captured is None:
+            if time.perf_counter() > end_at + 2.0:
+                raise RuntimeError("No camera frames before the key press.")
+            continue
+        captured_at, frame = captured
+        current = roi_gray(frame, roi)
+        if previous is not None:
+            motions.append(roi_motion(previous, current))
+        previous = current
+        pre_frames.append((captured_at, frame.copy(), 0.0))
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [("GUIDE: next channel selected, OK follows", (0, 255, 255), 1.0)]))
+        cv2.waitKey(1)
+    return pre_frames, previous, (float(np.median(motions)) if motions else 0.0)
+
+
+def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold):
+    """Samsung: OK, OK opens the GUIDE, Down picks the next channel; OK starts the timer."""
+    manufacturer = configuration['manufacturer']
+    print(f"[RUN {run_idx}] OK, OK (GUIDE), Down (next channel)...")
+    for key, pause in (('OK', GUIDE_KEY_GAP_SECONDS), ('OK', GUIDE_OPEN_SECONDS), ('Down', GUIDE_KEY_GAP_SECONDS)):
+        send_key(key, manufacturer)
+        end = time.perf_counter() + pause
+        while time.perf_counter() < end:
+            frame = read_frame(camera)
+            if frame is not None:
+                cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [(f"RUN {run_idx}  {key} sent", (255, 255, 255), 1.0)]))
+            cv2.waitKey(1)
+    frame_capture = CameraFrameCapture(camera)
+    frame_capture.start()
+    try:
+        pre_frames, last_roi, guide_motion = capture_pre_roll(frame_capture, roi)
+        frame_capture.clear_buffer()
+        print(f"[RUN {run_idx}] OK on the next channel; the timer starts now.")
+        key_pressed_at = send_key('OK', manufacturer)
+        winsound.Beep(1500, 300)
+        # A still GUIDE counts as the "picture stopped" phase; the first motion after OK is the new channel.
+        start_still = MIN_STILL_FRAMES if guide_motion < motion_threshold else 0
+        return measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir,
+                                configuration['timeout'], key_pressed_at, pre_frames, last_roi,
+                                key_label="OK", start_still=start_still)
+    finally:
+        frame_capture.stop()
+
+
 def zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold):
+    if configuration['zap_method'] == 'Guide':
+        return zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold)
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
@@ -813,7 +880,7 @@ def watch(camera, seconds, run_idx):
         if frame is not None:
             remaining = end - time.perf_counter()
             cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [
-                (f"RUN {run_idx} next Ch Up in {remaining:.1f} s", (0, 255, 255), 1.0)]))
+                (f"RUN {run_idx} next channel change in {remaining:.1f} s", (0, 255, 255), 1.0)]))
         if cv2.waitKey(1) & 0xFF == ord('q'):
             raise KeyboardInterrupt("Measurement canceled by user.")
 
@@ -855,7 +922,8 @@ def main():
                 f"_SWV{configuration['SWV']}_LGCV{configuration['LGCV']}"
             )
             os.makedirs(output_dir, exist_ok=True)
-            print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] Ch Up zap\n{'=' * 60}")
+            print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] channel change "
+                  f"({configuration['zap_method']})\n{'=' * 60}")
 
             result = zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold)
             if result['status'] != 'INVALID':
