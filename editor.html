@@ -98,6 +98,34 @@
           color: var(--muted); border: 1px solid var(--line); }
   .empty { padding: 40px; text-align: center; color: var(--muted); font-family: var(--font-body); }
   .help { font-size: 12px; color: var(--muted); }
+  .btn.big { font-size: 13px; padding: 8px 14px; }
+  td.actions { width: 1%; }
+  td.actions .row { gap: 4px; flex-wrap: nowrap; }
+  .btn.confirming { background: var(--fail); border-color: var(--fail); color: var(--panel); }
+  dialog { border: 1px solid var(--line); border-radius: 10px; padding: 0; width: min(720px, calc(100vw - 32px));
+           background: var(--panel); color: var(--text); }
+  dialog::backdrop { background: rgb(0 0 0 / .35); }
+  .form-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 16px 18px 0; }
+  .form-head h2 { font: 600 22px/1.1 var(--font-display); margin: 0; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px 14px; padding: 16px 18px;
+               max-height: 60vh; overflow: auto; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field input, .field select { width: 100%; font-family: var(--font-mono); }
+  .field.readonly input { color: var(--muted); background: var(--bg); }
+  .field.wide { grid-column: 1 / -1; }
+  .segmented { display: flex; gap: 4px; }
+  .segmented button { flex: 1; }
+  .segmented button.on.PASS { background: var(--pass-bg); border-color: var(--pass); color: var(--pass); }
+  .segmented button.on.FAIL { background: var(--fail-bg); border-color: var(--fail); color: var(--fail); }
+  .segmented button.on.INVALID { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+  .form-foot { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
+  .toast { position: fixed; left: 50%; transform: translateX(-50%);
+           bottom: calc(20px + env(safe-area-inset-bottom, 0px)); z-index: 20;
+           display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px;
+           background: var(--text); color: var(--bg); font-size: 13px; box-shadow: 0 6px 24px rgb(0 0 0 / .2);
+           max-width: calc(100vw - 32px); }
+  .toast.error { background: var(--fail); color: var(--panel); }
+  .toast button { font: 600 13px var(--font-body); background: none; border: 0; color: inherit; text-decoration: underline; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -105,7 +133,7 @@
   <header>
     <div>
       <h1>LGCperf Data Editor</h1>
-      <p class="definition">Edit result rows, exclude bad runs, or delete them for good. Changes to the Google Sheet need the admin key; deleted rows are copied to the sheet's <code>_Deleted</code> tab first.</p>
+      <p class="definition">Add, change, or delete result rows. Every change applies right away and can be undone from the message at the bottom.</p>
     </div>
     <div class="row">
       <span class="source" id="source"></span>
@@ -114,10 +142,12 @@
   </header>
 
   <div class="panel row">
-    <span class="label">Data</span>
-    <label class="btn file-btn">Open CSV file…<input type="file" id="csv-file" accept=".csv,text/csv"></label>
-    <button class="btn" id="download" hidden>Download edited CSV</button>
+    <button class="btn big" id="open-csv">Open CSV file…</button>
+    <input type="file" id="csv-file" accept=".csv,text/csv" hidden>
+    <button class="btn" id="reload-file" hidden>Reload file</button>
+    <button class="btn" id="download" hidden>Download CSV</button>
     <button class="btn" id="use-sheet" hidden>Back to Google Sheet</button>
+    <span class="help" id="file-note"></span>
     <span class="spacer"></span>
     <div class="row" id="admin"></div>
   </div>
@@ -125,6 +155,7 @@
   <div class="tabs" id="tabs"></div>
 
   <div class="row">
+    <button class="btn primary big" id="add">+ Add row</button>
     <input type="search" id="search" placeholder="Search any column">
     <label class="row" style="gap:6px"><span class="label">From</span><input type="date" id="from"></label>
     <label class="row" style="gap:6px"><span class="label">To</span><input type="date" id="to"></label>
@@ -133,23 +164,33 @@
     <label class="row" style="gap:6px"><input type="checkbox" id="show-excluded" checked> Show excluded</label>
   </div>
 
-  <div class="panel row">
-    <span id="selection" class="muted">No rows selected</span>
+  <div class="panel row" id="bulk" hidden>
+    <span id="selection"></span>
     <button class="btn" data-bulk="exclude">Exclude…</button>
     <button class="btn" data-bulk="restore">Restore</button>
-    <button class="btn danger" data-bulk="delete">Delete…</button>
-    <span class="spacer"></span>
-    <span id="pending" class="muted"></span>
-    <button class="btn" id="discard">Discard</button>
-    <button class="btn primary" id="save">Save changes</button>
+    <button class="btn danger" data-bulk="delete">Delete selected</button>
+    <button class="btn" data-bulk="clear">Clear selection</button>
   </div>
-
   <div id="confirm"></div>
-  <div class="message" id="message" role="status"></div>
 
   <div class="table-wrap"><table id="table"></table></div>
-  <p class="help">Click a cell to edit it, then press Enter (Esc cancels). Edited cells stay highlighted until you save. Row_ID and Uploaded_At are set by the system and cannot be edited.</p>
+  <p class="help">Double-click a cell to change just that value. Use Edit for the whole row. Row_ID and Uploaded_At are set automatically.</p>
 </div>
+
+<dialog id="form">
+  <form method="dialog" id="form-el">
+    <div class="form-head"><h2 id="form-title">Edit row</h2><span class="help" id="form-sub"></span></div>
+    <div class="form-grid" id="form-fields"></div>
+    <div class="form-foot">
+      <button class="btn primary big" id="form-save" value="save">Save</button>
+      <button class="btn big" value="cancel" formnovalidate>Cancel</button>
+      <span class="spacer"></span>
+      <button class="btn danger big" id="form-delete" type="button">Delete this row</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script>
 const API_URL = window.LGCPERF_API_URL && !/XXXX/.test(window.LGCPERF_API_URL) ? window.LGCPERF_API_URL : '';
@@ -160,11 +201,13 @@ const HIDDEN = [ID];
 const PREFERRED = ['Timestamp', 'Session', 'Run', 'Status', 'Home_Time_ms', 'Excluded', 'Exclude_Reason',
                    'SoC', 'SWV', 'LGCV', 'Manufacturer'];
 const STATUS_VALUES = ['PASS', 'FAIL', 'INVALID'];
+const DEFAULT_COLUMNS = ['TC', 'Run', 'Timestamp', 'Standby_Seconds', 'Home_Time_ms', 'Frames', 'Status', 'Directory'];
 
 const state = {
   mode: API_URL ? 'sheet' : 'sample',   // sheet | csv | sample
-  data: {}, tc: null, pending: {}, selected: new Set(), adminKey: null,
-  fileName: null, fileHadIds: true, fileDirty: false, confirm: null, editing: null, nextLocalId: 1,
+  data: {}, tc: null, selected: new Set(), adminKey: null, confirm: null, formId: null,
+  file: null,   // { name, handle, columns, hadIds, lastModified, dirty }
+  nextLocalId: 1,
 };
 const $ = id => document.getElementById(id);
 function esc(value) {
@@ -172,15 +215,25 @@ function esc(value) {
 }
 function dayOf(r) { const m = String(r.Timestamp || '').match(/^(\d{4})(\d{2})(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]}` : ''; }
 function isExcluded(r) { return String(r.Excluded || '').toUpperCase() === 'Y'; }
-function nowText() { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().replace('T', ' ').slice(0, 19); }
+function pad(n) { return String(n).padStart(2, '0'); }
+function nowText() { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; }
+function nowStamp() { const d = new Date(); return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`; }
 function rows() { return state.tc ? state.data[state.tc] || [] : []; }
-function pendingCount() { return Object.values(state.pending).reduce((n, cols) => n + Object.keys(cols).length, 0); }
-function needsKey() { return state.mode === 'sheet' && !state.adminKey; }
+function findRow(id) { return rows().find(r => r[ID] === id); }
+function plural(n, word) { return `${n} ${word}${n === 1 ? '' : 's'}`; }
+function locked() { return state.mode === 'sheet' && !state.adminKey; }
 
-function say(text, kind = 'ok') {
-  const box = $('message');
-  box.className = 'message ' + kind;
-  box.textContent = text;
+// ---------- toast with undo ----------
+let toastTimer = null;
+function toast(text, { undo = null, error = false } = {}) {
+  const box = $('toast');
+  box.className = 'toast' + (error ? ' error' : '');
+  box.innerHTML = `<span>${esc(text)}</span>` + (undo ? '<button id="undo">Undo</button>' : '') + '<button id="toast-close" aria-label="Close">✕</button>';
+  box.hidden = false;
+  $('toast-close').onclick = () => { box.hidden = true; };
+  if (undo) $('undo').onclick = () => { box.hidden = true; perform(undo, 'Undone.'); };
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, error ? 12000 : 8000);
 }
 
 // ---------- backends ----------
@@ -195,61 +248,77 @@ async function sheetPost(body) {
   return json;
 }
 
-const backend = {
-  async load() {
-    if (state.mode === 'sheet') {
-      const response = await fetch(API_URL + '?action=data');
-      if (!response.ok) throw new Error(`Could not load the sheet (HTTP ${response.status}).`);
-      const json = await response.json();
-      if (!json.ok) throw new Error(json.error || 'Could not load the sheet.');
-      state.data = json.data;
-    } else if (state.mode === 'sample') {
-      state.data = sampleData();
-    }
+// Each operation returns its own inverse so every change can be undone.
+const ops = {
+  async update(id, values) {
+    const row = findRow(id);
+    const before = {};
+    Object.keys(values).forEach(k => { before[k] = row[k] ?? ''; });
+    if (state.mode === 'sheet') await sheetPost({ action: 'update', tc: state.tc, changes: [{ id, values }] });
+    Object.assign(row, values);
+    return () => ops.update(id, before);
   },
-  async update(changes) {
-    if (state.mode === 'sheet') return sheetPost({ action: 'update', tc: state.tc, changes });
-    changes.forEach(({ id, values }) => Object.assign(rows().find(r => r[ID] === id), values));
-    markLocalChange();
+  async add(record, tc = state.tc) {
+    const row = { ...record };
+    if (state.mode === 'sheet') {
+      row[ID] = (await sheetPost({ action: 'add', tc, row })).id;
+    } else if (!row[ID]) {
+      row[ID] = 'local-' + state.nextLocalId++;
+    }
+    (state.data[tc] = state.data[tc] || []).push(row);
+    if (!state.tc) state.tc = tc;
+    return () => ops.remove([row[ID]], tc);
+  },
+  async remove(ids, tc = state.tc) {
+    const removed = (state.data[tc] || []).filter(r => ids.includes(r[ID]));
+    if (state.mode === 'sheet') await sheetPost({ action: 'delete', tc, ids });
+    state.data[tc] = (state.data[tc] || []).filter(r => !ids.includes(r[ID]));
+    ids.forEach(id => state.selected.delete(id));
+    return async () => { for (const r of removed) await ops.add(r, tc); };
   },
   async exclude(ids, excluded, reason) {
-    if (state.mode === 'sheet') return sheetPost({ action: 'exclude', tc: state.tc, ids, excluded, reason });
+    const before = ids.map(id => { const r = findRow(id); return [id, { Excluded: r.Excluded ?? '', Exclude_Reason: r.Exclude_Reason ?? '', Excluded_At: r.Excluded_At ?? '' }]; });
     const values = { Excluded: excluded ? 'Y' : '', Exclude_Reason: excluded ? reason : '', Excluded_At: excluded ? nowText() : '' };
-    rows().filter(r => ids.includes(r[ID])).forEach(r => Object.assign(r, values));
-    markLocalChange();
-  },
-  async remove(ids) {
-    if (state.mode === 'sheet') return sheetPost({ action: 'delete', tc: state.tc, ids });
-    state.data[state.tc] = rows().filter(r => !ids.includes(r[ID]));
-    markLocalChange();
+    if (state.mode === 'sheet') await sheetPost({ action: 'exclude', tc: state.tc, ids, excluded, reason });
+    ids.forEach(id => Object.assign(findRow(id), values));
+    return async () => { for (const [id, old] of before) await ops.update(id, old); };
   },
 };
 
-function markLocalChange() { if (state.mode === 'csv') state.fileDirty = true; }
-
-async function reload() {
+// Run an operation, persist it, show a toast with Undo.
+async function perform(task, message) {
+  if (locked()) { toast('Unlock editing with the admin key first.', { error: true }); return; }
   try {
-    await backend.load();
-    const tcs = Object.keys(state.data);
-    if (!tcs.includes(state.tc)) state.tc = tcs[0] || null;
-    render();
+    const undo = await task();
+    const saved = await persistLocal();
+    if (saved === false) return;
+    toast(message + (saved ? ' Saved to file.' : ''), { undo: typeof undo === 'function' ? undo : null });
   } catch (error) {
-    say(error.message, 'error');
-  }
-}
-
-async function run(task, success) {
-  try {
-    await task();
-    say(success, 'ok');
-    if (state.mode === 'sheet') await backend.load();
-  } catch (error) {
-    say(error.message, 'error');
+    toast(error.message, { error: true });
   }
   render();
 }
 
-// ---------- CSV ----------
+async function loadSheet() {
+  try {
+    const response = await fetch(API_URL + '?action=data');
+    if (!response.ok) throw new Error(`Could not load the sheet (HTTP ${response.status}).`);
+    const json = await response.json();
+    if (!json.ok) throw new Error(json.error || 'Could not load the sheet.');
+    state.data = json.data;
+  } catch (error) {
+    toast(error.message, { error: true });
+  }
+  pickTab();
+  render();
+}
+
+function pickTab() {
+  const tcs = Object.keys(state.data);
+  if (!tcs.includes(state.tc)) state.tc = tcs[0] || null;
+}
+
+// ---------- CSV files ----------
 function parseCsv(text) {
   const out = []; let row = [], field = '', quoted = false;
   for (let i = 0; i < text.length; i++) {
@@ -277,48 +346,90 @@ function toCsv(records, columns) {
   return [columns.map(cell).join(',')].concat(records.map(r => columns.map(c => cell(r[c])).join(','))).join('\r\n') + '\r\n';
 }
 
-function loadCsvFile(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    const table = parseCsv(String(reader.result).replace(/^﻿/, ''));
-    if (table.length < 1) { say('That file has no rows.', 'error'); return; }
-    const header = table[0];
-    state.fileHadIds = header.includes(ID);
-    const data = {};
-    table.slice(1).forEach(line => {
-      const record = {};
-      header.forEach((key, index) => { record[key] = line[index] ?? ''; });
-      if (!record[ID]) record[ID] = 'local-' + state.nextLocalId++;
-      const tc = record.TC || file.name.replace(/\.csv$/i, '');
-      (data[tc] = data[tc] || []).push(record);
-    });
-    Object.assign(state, { mode: 'csv', data, tc: Object.keys(data)[0], fileName: file.name, fileDirty: false,
-                           pending: {}, selected: new Set(), confirm: null });
-    say(`Opened ${file.name}: ${table.length - 1} rows. Edits stay in this browser until you download the CSV.`, 'ok');
+function loadCsvText(text, name, handle, lastModified) {
+  const table = parseCsv(String(text).replace(/^﻿/, ''));
+  if (!table.length) { toast('That file is empty.', { error: true }); return; }
+  const header = table[0];
+  const data = {};
+  table.slice(1).forEach(line => {
+    const record = {};
+    header.forEach((key, index) => { record[key] = line[index] ?? ''; });
+    if (!record[ID]) record[ID] = 'local-' + state.nextLocalId++;
+    const tc = record.TC || name.replace(/\.csv$/i, '');
+    (data[tc] = data[tc] || []).push(record);
+  });
+  Object.assign(state, { mode: 'csv', data, selected: new Set(), confirm: null,
+    file: { name, handle, columns: header, hadIds: header.includes(ID), lastModified, dirty: false } });
+  pickTab();
+  toast(`Opened ${name} (${plural(table.length - 1, 'row')}).`);
+  render();
+}
+
+function csvText() {
+  const all = Object.values(state.data).flat();
+  const extra = [...new Set(all.flatMap(r => Object.keys(r)))].filter(c => !state.file.columns.includes(c));
+  const columns = state.file.columns.concat(extra).filter(c => state.file.hadIds || c !== ID);
+  return toCsv(all, columns);
+}
+
+async function openCsv() {
+  if (!window.showOpenFilePicker) { $('csv-file').click(); return; }
+  try {
+    const [handle] = await window.showOpenFilePicker({ types: [{ description: 'CSV', accept: { 'text/csv': ['.csv'] } }] });
+    const file = await handle.getFile();
+    loadCsvText(await file.text(), file.name, handle, file.lastModified);
+  } catch (error) {
+    if (error.name !== 'AbortError') toast(error.message, { error: true });
+  }
+}
+
+async function reloadFile() {
+  const file = await state.file.handle.getFile();
+  loadCsvText(await file.text(), file.name, state.file.handle, file.lastModified);
+}
+
+// Returns true when written to disk, null when there is nothing to write, false when blocked.
+async function persistLocal() {
+  if (state.mode !== 'csv') return null;
+  if (!state.file.handle) { state.file.dirty = true; return null; }
+  try {
+    const current = await state.file.handle.getFile();
+    if (current.lastModified !== state.file.lastModified) {
+      state.file.dirty = true;
+      toast('The file changed on disk (a measurement may have added rows). Reload the file, then make the change again.', { error: true });
+      render();
+      return false;
+    }
+    const writable = await state.file.handle.createWritable();
+    await writable.write(csvText());
+    await writable.close();
+    state.file.lastModified = (await state.file.handle.getFile()).lastModified;
+    state.file.dirty = false;
+    return true;
+  } catch (error) {
+    state.file.dirty = true;
+    toast('Could not save to the file: ' + error.message + ' Use Download CSV instead.', { error: true });
     render();
-  };
-  reader.readAsText(file);
+    return false;
+  }
 }
 
 function downloadCsv() {
-  const all = Object.values(state.data).flat();
-  let columns = [...new Set(all.flatMap(r => Object.keys(r)))];
-  if (!state.fileHadIds) columns = columns.filter(c => c !== ID);
-  const blob = new Blob(['﻿' + toCsv(all, columns)], { type: 'text/csv;charset=utf-8' });
+  const blob = new Blob([csvText()], { type: 'text/csv;charset=utf-8' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = state.fileName || 'results.csv';
+  link.download = state.file.name || 'results.csv';
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-  state.fileDirty = false;
-  say(`Downloaded ${link.download}. Replace the original file with it to keep the changes.`, 'ok');
+  state.file.dirty = false;
+  toast(`Downloaded ${link.download}. Replace the original file with it.`);
   render();
 }
 
 // ---------- admin key ----------
 function renderAdmin() {
   const box = $('admin');
-  if (state.mode !== 'sheet') { box.innerHTML = '<span class="help">No admin key needed for local files</span>'; return; }
+  if (state.mode !== 'sheet') { box.innerHTML = ''; return; }
   if (state.adminKey) {
     box.innerHTML = '<span class="source sheet">Editing unlocked</span><button class="btn" id="lock">Lock</button>';
     $('lock').onclick = () => { state.adminKey = null; try { localStorage.removeItem(KEY_STORAGE); } catch (e) {} render(); };
@@ -332,10 +443,10 @@ function renderAdmin() {
     try {
       await sheetPost({ action: 'checkKey' });
       try { localStorage.setItem(KEY_STORAGE, key); } catch (e) {}
-      say('Editing unlocked.', 'ok');
+      toast('Editing unlocked.');
     } catch (error) {
       state.adminKey = null;
-      say(error.message, 'error');
+      toast(error.message, { error: true });
     }
     render();
   };
@@ -343,7 +454,7 @@ function renderAdmin() {
   $('key').onkeydown = e => { if (e.key === 'Enter') unlock(); };
 }
 
-// ---------- filtering & rendering ----------
+// ---------- rendering ----------
 function visibleRows() {
   const query = $('search').value.trim().toLowerCase();
   const from = $('from').value, to = $('to').value, status = $('status').value;
@@ -359,35 +470,39 @@ function visibleRows() {
 }
 
 function columnsFor(list) {
-  const keys = [...new Set(list.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN.includes(k));
+  const base = state.mode === 'csv' ? state.file.columns : [];
+  const keys = [...new Set(base.concat(list.flatMap(r => Object.keys(r))))].filter(k => !HIDDEN.includes(k));
   return PREFERRED.filter(k => keys.includes(k)).concat(keys.filter(k => !PREFERRED.includes(k)));
 }
 
 function render() {
-  const labels = { sheet: 'Google Sheet (live)', csv: `Local file: ${state.fileName}`, sample: 'Sample data' };
+  const labels = { sheet: 'Google Sheet (live)', csv: `File: ${state.file && state.file.name}`, sample: 'Sample data (not saved)' };
   $('source').className = 'source ' + state.mode;
-  $('source').textContent = labels[state.mode] + (state.fileDirty ? ' · not downloaded' : '');
-  $('download').hidden = state.mode !== 'csv';
-  $('download').className = state.fileDirty ? 'btn primary' : 'btn';
-  $('use-sheet').hidden = !(API_URL && state.mode === 'csv');
+  $('source').textContent = labels[state.mode];
+  const csv = state.mode === 'csv';
+  $('reload-file').hidden = !(csv && state.file.handle);
+  $('download').hidden = !csv;
+  $('download').className = csv && state.file.dirty ? 'btn primary' : 'btn';
+  $('use-sheet').hidden = !(API_URL && csv);
+  $('file-note').textContent = !csv ? '' : state.file.handle
+    ? (state.file.dirty ? 'Not saved to the file yet.' : 'Changes save to the file automatically.')
+    : (state.file.dirty ? 'Changes are only in this page. Download the CSV to keep them.' : 'This browser cannot save directly; use Download CSV after editing.');
+  $('add').disabled = locked();
   renderAdmin();
 
   const tcs = Object.keys(state.data);
   $('tabs').innerHTML = tcs.map(tc =>
     `<button class="tab ${tc === state.tc ? 'active' : ''}" data-tc="${esc(tc)}">${esc(tc)}<span class="muted">${state.data[tc].length}</span></button>`).join('');
   $('tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => {
-    if (pendingCount() && !window.confirm('Discard unsaved edits on this tab?')) return;
-    Object.assign(state, { tc: b.dataset.tc, pending: {}, selected: new Set(), confirm: null }); render();
+    Object.assign(state, { tc: b.dataset.tc, selected: new Set(), confirm: null }); render();
   });
 
   const ids = new Set(rows().map(r => r[ID]));
   state.selected = new Set([...state.selected].filter(id => ids.has(id)));
-  const n = state.selected.size, p = pendingCount(), locked = needsKey();
-  $('selection').textContent = n ? `${n} row${n > 1 ? 's' : ''} selected` : 'No rows selected';
-  document.querySelectorAll('[data-bulk]').forEach(b => { b.disabled = !n || locked; });
-  $('pending').textContent = p ? `${p} unsaved edit${p > 1 ? 's' : ''}` : '';
-  $('save').disabled = !p || locked;
-  $('discard').disabled = !p;
+  const n = state.selected.size;
+  $('bulk').hidden = !n;
+  $('selection').textContent = plural(n, 'row') + ' selected';
+  document.querySelectorAll('[data-bulk]').forEach(b => { b.disabled = b.dataset.bulk !== 'clear' && locked(); });
   renderConfirm();
   renderTable();
 }
@@ -397,74 +512,76 @@ function renderConfirm() {
   const n = state.selected.size;
   if (!state.confirm || !n) { box.innerHTML = ''; state.confirm = null; return; }
   if (state.confirm === 'exclude') {
-    box.innerHTML = `<div class="confirm"><span>Exclude ${n} row${n > 1 ? 's' : ''} from statistics. Reason:</span>
+    box.innerHTML = `<div class="confirm"><span>Why exclude ${plural(n, 'row')}?</span>
       <input type="text" id="reason" placeholder="e.g. TV did not turn off">
-      <button class="btn primary" id="confirm-ok">Exclude ${n}</button><button class="btn" id="confirm-cancel">Cancel</button></div>`;
+      <button class="btn primary" id="confirm-ok">Exclude</button><button class="btn" id="confirm-cancel">Cancel</button></div>`;
     $('reason').focus();
     $('reason').onkeydown = e => { if (e.key === 'Enter') $('confirm-ok').click(); if (e.key === 'Escape') $('confirm-cancel').click(); };
   } else {
-    const where = state.mode === 'sheet'
-      ? 'They are copied to the _Deleted tab of the sheet, then removed.'
-      : 'They are removed from the loaded file; download the CSV to keep the change.';
-    box.innerHTML = `<div class="confirm danger"><span><b>Permanently delete ${n} row${n > 1 ? 's' : ''}?</b> ${where}</span>
-      <button class="btn danger solid" id="confirm-ok">Delete ${n} row${n > 1 ? 's' : ''}</button><button class="btn" id="confirm-cancel">Cancel</button></div>`;
+    box.innerHTML = `<div class="confirm danger"><span><b>Delete ${plural(n, 'row')}?</b> You can undo right after.</span>
+      <button class="btn danger solid" id="confirm-ok">Delete ${plural(n, 'row')}</button><button class="btn" id="confirm-cancel">Cancel</button></div>`;
   }
   $('confirm-cancel').onclick = () => { state.confirm = null; render(); };
   $('confirm-ok').onclick = () => {
     const ids = [...state.selected];
     if (state.confirm === 'exclude') {
       const reason = $('reason').value.trim();
-      if (!reason) { $('reason').focus(); say('Enter a reason so others know why the runs were excluded.', 'error'); return; }
+      if (!reason) { $('reason').focus(); return; }
       state.confirm = null;
-      run(() => backend.exclude(ids, true, reason), `Excluded ${ids.length} row${ids.length > 1 ? 's' : ''}.`);
+      perform(() => ops.exclude(ids, true, reason), `Excluded ${plural(ids.length, 'row')}.`);
     } else {
       state.confirm = null;
-      ids.forEach(id => delete state.pending[id]);
-      state.selected = new Set();
-      run(() => backend.remove(ids), `Deleted ${ids.length} row${ids.length > 1 ? 's' : ''}.`);
+      perform(() => ops.remove(ids), `Deleted ${plural(ids.length, 'row')}.`);
     }
   };
 }
 
 function cellHtml(r, c) {
-  const pending = state.pending[r[ID]] || {};
-  const value = c in pending ? pending[c] : r[c];
-  const readOnly = READ_ONLY.includes(c);
-  const cls = [readOnly ? 'readonly' : 'editable', c in pending ? 'dirty' : ''].join(' ');
+  const value = r[c];
   let shown = esc(value);
   if (c === 'Status' && value) shown = `<span class="badge ${esc(value)}">${esc(value)}</span>`;
   if (c === 'Excluded' && String(value).toUpperCase() === 'Y') shown = '<span class="chip">Excluded</span>';
-  return `<td class="${cls}" data-id="${esc(r[ID])}" data-col="${esc(c)}">${shown}</td>`;
+  return `<td class="${READ_ONLY.includes(c) ? 'readonly' : 'editable'}" data-id="${esc(r[ID])}" data-col="${esc(c)}">${shown}</td>`;
 }
 
 function renderTable() {
   const table = $('table');
   const list = visibleRows().slice().reverse();
   if (!list.length) {
-    table.innerHTML = `<tr><td class="empty">${rows().length ? 'No rows match these filters.' : 'No data yet. Open a CSV file or connect the Google Sheet.'}</td></tr>`;
+    table.innerHTML = `<tr><td class="empty">${rows().length ? 'No rows match these filters.' : 'No rows yet. Use + Add row, or open a CSV file.'}</td></tr>`;
     return;
   }
   const columns = columnsFor(rows());
   const allSelected = list.every(r => state.selected.has(r[ID]));
-  table.innerHTML = `<tr><th class="sel"><input type="checkbox" id="select-all" aria-label="Select all shown rows" ${allSelected ? 'checked' : ''}></th>` +
+  table.innerHTML = `<tr><th class="sel"><input type="checkbox" id="select-all" aria-label="Select all shown rows" ${allSelected ? 'checked' : ''}></th><th></th>` +
     columns.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>' +
     list.map(r => `<tr class="${state.selected.has(r[ID]) ? 'selected' : ''} ${isExcluded(r) ? 'excluded' : ''}">` +
       `<td class="sel"><input type="checkbox" data-select="${esc(r[ID])}" aria-label="Select row" ${state.selected.has(r[ID]) ? 'checked' : ''}></td>` +
+      `<td class="actions"><div class="row"><button class="btn" data-edit="${esc(r[ID])}">Edit</button>` +
+      `<button class="btn danger" data-delete="${esc(r[ID])}" ${locked() ? 'disabled' : ''}>Delete</button></div></td>` +
       columns.map(c => cellHtml(r, c)).join('') + '</tr>').join('');
 
   $('select-all').onchange = e => { list.forEach(r => e.target.checked ? state.selected.add(r[ID]) : state.selected.delete(r[ID])); render(); };
   table.querySelectorAll('[data-select]').forEach(box => box.onchange = () => {
     box.checked ? state.selected.add(box.dataset.select) : state.selected.delete(box.dataset.select); render();
   });
-  table.querySelectorAll('td.editable').forEach(td => td.onclick = () => startEdit(td));
+  table.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openForm(b.dataset.edit));
+  // Two-step delete: first click arms the button, second click deletes.
+  table.querySelectorAll('[data-delete]').forEach(b => b.onclick = () => {
+    if (!b.classList.contains('confirming')) {
+      b.classList.add('confirming'); b.textContent = 'Sure?';
+      setTimeout(() => { b.classList.remove('confirming'); b.textContent = 'Delete'; }, 3000);
+      return;
+    }
+    perform(() => ops.remove([b.dataset.delete]), 'Deleted 1 row.');
+  });
+  table.querySelectorAll('td.editable').forEach(td => td.ondblclick = () => startCellEdit(td));
 }
 
-function startEdit(td) {
-  if (td.querySelector('.cell')) return;
+function startCellEdit(td) {
+  if (locked() || td.querySelector('.cell')) return;
   const id = td.dataset.id, col = td.dataset.col;
-  const record = rows().find(r => r[ID] === id);
-  const pending = state.pending[id] || {};
-  const current = col in pending ? pending[col] : record[col] ?? '';
+  const current = String(findRow(id)[col] ?? '');
   td.innerHTML = col === 'Status'
     ? `<select class="cell">${STATUS_VALUES.concat(STATUS_VALUES.includes(current) ? [] : [current])
         .map(v => `<option ${v === current ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`
@@ -475,72 +592,161 @@ function startEdit(td) {
   let done = false;
   const finish = commit => {
     if (done) return; done = true;
-    if (commit) {
-      const value = input.value;
-      const original = String(record[col] ?? '');
-      state.pending[id] = state.pending[id] || {};
-      if (value === original) delete state.pending[id][col]; else state.pending[id][col] = value;
-      if (!Object.keys(state.pending[id]).length) delete state.pending[id];
-    }
-    render();
+    if (commit && input.value !== current) perform(() => ops.update(id, { [col]: input.value }), `Changed ${col}.`);
+    else render();
   };
   input.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
   input.onblur = () => finish(true);
   if (col === 'Status') input.onchange = () => finish(true);
 }
 
+// ---------- row form (add / edit) ----------
+function openForm(id) {
+  state.formId = id;
+  const editing = !!id;
+  const record = editing ? findRow(id) : newRecord();
+  const columns = columnsFor(rows().length ? rows() : [record]).filter(c => editing || !READ_ONLY.includes(c));
+  $('form-title').textContent = editing ? 'Edit row' : 'Add row';
+  $('form-sub').textContent = editing ? (record.Timestamp ? `Run ${record.Run || '–'} · ${record.Timestamp}` : '') : `Adds to ${state.tc || record.TC}`;
+  $('form-delete').hidden = !editing || locked();
+  $('form-delete').textContent = 'Delete this row';
+  $('form-delete').classList.remove('confirming');
+  $('form-save').disabled = locked();
+  $('form-fields').innerHTML = columns.map(c => {
+    const value = record[c] ?? '';
+    const readOnly = READ_ONLY.includes(c);
+    if (c === 'Status') {
+      return `<div class="field"><span class="label">Status</span><div class="segmented" data-field="Status" data-value="${esc(value)}">` +
+        STATUS_VALUES.map(v => `<button type="button" class="btn ${v} ${v === value ? 'on' : ''}" data-status="${v}">${v}</button>`).join('') + '</div></div>';
+    }
+    if (c === 'Excluded') {
+      return `<div class="field"><span class="label">Excluded</span><label class="row" style="gap:6px;height:30px">` +
+        `<input type="checkbox" data-field="Excluded" ${isExcluded(record) ? 'checked' : ''}> Leave out of statistics</label></div>`;
+    }
+    const wide = ['Directory', 'Exclude_Reason'].includes(c) ? ' wide' : '';
+    return `<label class="field${readOnly ? ' readonly' : ''}${wide}"><span class="label">${esc(c)}</span>` +
+      `<input type="text" data-field="${esc(c)}" value="${esc(value)}" ${readOnly ? 'readonly' : ''}></label>`;
+  }).join('');
+  $('form-fields').querySelectorAll('[data-status]').forEach(b => b.onclick = () => {
+    const group = b.parentElement;
+    group.dataset.value = b.dataset.status;
+    group.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  });
+  $('form').showModal();
+  const first = $('form-fields').querySelector('input:not([readonly])');
+  if (first) first.focus();
+}
+
+function newRecord() {
+  const sample = rows()[rows().length - 1] || {};
+  const record = {};
+  const keep = ['TC', 'Session', 'Manufacturer', 'SoC', 'SWV', 'LGCV', 'Standby_Seconds', 'Similarity_Threshold'];
+  columnsFor(rows().length ? rows() : [Object.fromEntries(DEFAULT_COLUMNS.map(c => [c, '']))]).forEach(c => {
+    record[c] = keep.includes(c) ? sample[c] ?? '' : '';
+  });
+  record.TC = record.TC || state.tc || 'Omedia_TC01';
+  record.Timestamp = nowStamp();
+  record.Status = 'PASS';
+  const runs = rows().map(r => Number(r.Run)).filter(Number.isFinite);
+  if ('Run' in record) record.Run = String(runs.length ? Math.max(...runs) + 1 : 1);
+  return record;
+}
+
+function readForm() {
+  const values = {};
+  $('form-fields').querySelectorAll('[data-field]').forEach(el => {
+    const name = el.dataset.field;
+    if (READ_ONLY.includes(name)) return;
+    if (name === 'Status') values.Status = el.dataset.value;
+    else if (name === 'Excluded') values.Excluded = el.checked ? 'Y' : '';
+    else values[name] = el.value;
+  });
+  return values;
+}
+
+$('form-el').onsubmit = e => {
+  if (e.submitter && e.submitter.value !== 'save') return;
+  const values = readForm();
+  const id = state.formId;
+  if (id) {
+    const row = findRow(id);
+    const changed = Object.fromEntries(Object.entries(values).filter(([k, v]) => String(row[k] ?? '') !== v));
+    if (changed.Excluded === 'Y' && !('Excluded_At' in changed)) changed.Excluded_At = nowText();
+    if (changed.Excluded === '') { changed.Excluded_At = ''; }
+    if (!Object.keys(changed).length) return;
+    perform(() => ops.update(id, changed), `Saved ${plural(Object.keys(changed).length, 'change')}.`);
+  } else {
+    const tc = String(values.TC || state.tc || 'Omedia_TC01');
+    if (values.Excluded === 'Y') values.Excluded_At = nowText();
+    perform(() => ops.add(values, tc).then(undo => { state.tc = tc; return undo; }), 'Added 1 row.');
+  }
+};
+
+$('form-delete').onclick = () => {
+  const b = $('form-delete');
+  if (!b.classList.contains('confirming')) { b.classList.add('confirming'); b.textContent = 'Click again to delete'; return; }
+  $('form').close();
+  perform(() => ops.remove([state.formId]), 'Deleted 1 row.');
+};
+
 // ---------- wiring ----------
+$('open-csv').onclick = openCsv;
 $('csv-file').onchange = e => {
   const file = e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  if ((pendingCount() || state.fileDirty) && !window.confirm('You have unsaved changes. Open another file anyway?')) return;
-  loadCsvFile(file);
+  const reader = new FileReader();
+  reader.onload = () => loadCsvText(reader.result, file.name, null, file.lastModified);
+  reader.readAsText(file);
 };
+$('reload-file').onclick = () => reloadFile().catch(error => toast(error.message, { error: true }));
 $('download').onclick = downloadCsv;
 $('use-sheet').onclick = () => {
-  if (state.fileDirty && !window.confirm('The edited CSV has not been downloaded. Switch anyway?')) return;
-  Object.assign(state, { mode: 'sheet', pending: {}, selected: new Set(), fileDirty: false, confirm: null });
-  reload();
+  if (state.file && state.file.dirty && !window.confirm('Your CSV edits are not saved. Switch anyway?')) return;
+  Object.assign(state, { mode: 'sheet', selected: new Set(), confirm: null, file: null });
+  loadSheet();
 };
+$('add').onclick = () => openForm(null);
 ['search', 'from', 'to', 'status', 'show-excluded'].forEach(id => $(id).addEventListener('input', () => render()));
 document.querySelectorAll('[data-bulk]').forEach(b => b.onclick = () => {
   const kind = b.dataset.bulk;
+  if (kind === 'clear') { state.selected = new Set(); render(); return; }
   if (kind === 'restore') {
     const ids = [...state.selected];
-    run(() => backend.exclude(ids, false, ''), `Restored ${ids.length} row${ids.length > 1 ? 's' : ''}.`);
-  } else {
-    state.confirm = kind; render();
+    perform(() => ops.exclude(ids, false, ''), `Restored ${plural(ids.length, 'row')}.`);
+    return;
   }
+  state.confirm = kind; render();
 });
-$('discard').onclick = () => { state.pending = {}; say('Edits discarded.', 'ok'); render(); };
-$('save').onclick = () => {
-  const changes = Object.entries(state.pending).map(([id, values]) => ({ id, values }));
-  const count = pendingCount();
-  run(async () => { await backend.update(changes); state.pending = {}; }, `Saved ${count} edit${count > 1 ? 's' : ''}.`);
-};
-window.addEventListener('beforeunload', e => { if (pendingCount() || state.fileDirty) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if (state.file && state.file.dirty) { e.preventDefault(); e.returnValue = ''; } });
 
 function sampleData() {
-  const rows = [];
-  [['20261018_093000', '9200'], ['20261020_093000', '8400']].forEach(([session, base], b) => {
+  const list = [];
+  [['20261018_093000', 9200], ['20261020_093000', 8400]].forEach(([session, base], b) => {
     for (let run = 1; run <= 5; run++) {
-      rows.push({
+      const bad = run === 3 && !b;
+      list.push({
         Row_ID: `sample-${b}-${run}`, Uploaded_At: '', TC: 'Omedia_TC01', Session: session, Run: String(run),
-        Timestamp: session.slice(0, 9) + String(10 + run).padStart(2, '0') + '1500', Manufacturer: 'Samsung',
+        Timestamp: session.slice(0, 9) + pad(10 + run) + '1500', Manufacturer: 'Samsung',
         SoC: 'U8000', SWV: b ? '1310' : '1300', LGCV: b ? '8.2.010' : '8.2.008', Standby_Seconds: '300',
-        Similarity_Threshold: '0.7', Home_Time_ms: run === 3 && !b ? '0.22' : (Number(base) + run * 37).toFixed(2),
-        Frames: run === 3 && !b ? '1' : String(270 + run), Status: run === 3 && !b ? 'INVALID' : 'PASS',
+        Similarity_Threshold: '0.7', Home_Time_ms: bad ? '0.22' : (base + run * 37).toFixed(2),
+        Frames: bad ? '1' : String(270 + run), Status: bad ? 'INVALID' : 'PASS',
         Excluded: '', Exclude_Reason: '', Excluded_At: '',
       });
     }
   });
-  return { Omedia_TC01: rows };
+  return { Omedia_TC01: list };
 }
 
 try { state.adminKey = localStorage.getItem(KEY_STORAGE); } catch (e) {}
-if (state.mode === 'sample') say('Showing sample data. Open a CSV file to edit local results, or connect the Google Sheet in config.js.', 'ok');
-reload();
+if (state.mode === 'sheet') {
+  loadSheet();
+} else {
+  state.data = sampleData();
+  pickTab();
+  render();
+  toast('Showing sample data. Click "Open CSV file…" to edit your results file.');
+}
 </script>
 </body>
 </html>
