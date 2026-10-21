@@ -431,20 +431,35 @@ def capture_home_ready(camera):
     return np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
 
 
-def capture_tvplus_screen(camera, calibration_dir):
-    """Live view after TV Plus opens; Enter in the window captures the screen shown at that moment."""
+def capture_tvplus_screen(camera, calibration_dir, home_ready, manufacturer):
+    """Live view after OK; Enter captures the TV Plus screen once it is no longer the Home screen."""
     print(f"\n[SETUP] {APP_NAME} is opening. When the live TV stream is playing, press ENTER in the "
-          "camera window to capture the screen (Q = cancel).")
+          "camera window to capture the screen (O = send OK again, Q = cancel).")
+    # Drop key presses left over from earlier windows (e.g. a held Enter) so they cannot capture Home.
+    for _ in range(50):
+        if cv2.waitKey(1) == -1:
+            break
     while True:
         frame = read_frame(camera)
         if frame is None:
             continue
-        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [
-            (f"{APP_NAME}: press ENTER when live TV is playing", (0, 255, 0), 1.0),
-        ]))
+        on_home = screen_similarity(frame, home_ready) >= HOME_READY_SIMILARITY
+        message = (f"Still the Home screen - waiting for {APP_NAME} to open (O = send OK again)" if on_home
+                   else f"{APP_NAME}: press ENTER when live TV is playing")
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [(message, (0, 255, 255) if on_home else (0, 255, 0), 1.0)]))
         key = cv2.waitKey(1) & 0xFF
         if key in (10, 13):
+            if on_home:
+                print(f"[SETUP] The camera still sees the Home screen; wait until {APP_NAME} is showing.")
+                continue
+            # Capture fresh frames taken after the key press, not the one already on screen.
+            for _ in range(3):
+                fresh = read_frame(camera)
+                if fresh is not None:
+                    frame = fresh
             break
+        if key == ord('o'):
+            send_key('OK', manufacturer)
         if key == ord('q'):
             raise KeyboardInterrupt("Setup canceled.")
     for path in (TVPLUS_SCREEN_FILE, os.path.join(calibration_dir, "tvplus_screen.jpg")):
@@ -488,7 +503,7 @@ def measure_playing_motion(camera, roi, seconds=2.0):
     return float(np.median(values)) if values else 0.0
 
 
-def setup_stream_detection(configuration, camera, route, calibration_dir):
+def setup_stream_detection(configuration, camera, route, calibration_dir, home_ready):
     """Capture the TV Plus screen, let the user mark the live video area, and measure its motion.
 
     A saved area is shown on the saved TV Plus screen and can be reused.
@@ -513,7 +528,7 @@ def setup_stream_detection(configuration, camera, route, calibration_dir):
     while True:
         print(f"\n[SETUP] Launching {APP_NAME} once (not measured).")
         send_key('OK', manufacturer)
-        screen = capture_tvplus_screen(camera, calibration_dir)
+        screen = capture_tvplus_screen(camera, calibration_dir, home_ready, manufacturer)
         roi = select_stream_area(screen)
         if roi is None:
             print("[SETUP] The box is too small. Try again.")
@@ -749,7 +764,7 @@ def main():
         replay_route(route, configuration['manufacturer'], camera)
         home_ready = capture_home_ready(camera)
         cv2.imwrite(os.path.join(calibration_dir, "home_ready.jpg"), home_ready)
-        roi, motion_threshold = setup_stream_detection(configuration, camera, route, calibration_dir)
+        roi, motion_threshold = setup_stream_detection(configuration, camera, route, calibration_dir, home_ready)
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
