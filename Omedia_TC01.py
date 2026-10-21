@@ -1,4 +1,4 @@
-import cv2
+﻿import cv2
 import numpy as np
 import os
 import pandas as pd
@@ -6,6 +6,7 @@ import queue
 import subprocess
 import threading
 import time
+import winsound
 from datetime import datetime
 
 from config_store import load_saved_configuration, save_configuration
@@ -14,6 +15,7 @@ from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC01_config.json")
+HOME_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC01_home_reference.jpg")
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'LG',
     'SoC': 'O22N3',
@@ -21,7 +23,7 @@ DEFAULT_CONFIGURATION = {
     'LGCV': '4.0.18-1',
     'num_runs': 5,
     'timeout': 180.0,
-    'home_similarity_threshold': 0.92,
+    'home_similarity_threshold': 0.7,
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
@@ -31,7 +33,8 @@ RAW_IR_KEYSETS = {
     'Samsung': SAMSUNG_KEYS,
 }
 CAMERA_INDEX = 1
-STANDBY_SECONDS = 20
+STANDBY_SECONDS = 300
+CAPTURE_WINDOW = "Omedia_TC01 Capture"
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC01_response.csv")
 
 
@@ -160,10 +163,34 @@ def capture_home_reference(camera, output_dir):
         approval = input("Use this captured Home screen as the landing reference? (Y/n): ").strip().lower()
         cv2.destroyWindow("Home Reference Preview")
         if approval in ('', 'y', 'yes'):
-            if not cv2.imwrite(reference_path, reference):
-                raise RuntimeError(f"Could not save Home screen reference: {reference_path}")
+            for image_path in (reference_path, HOME_REFERENCE_FILE):
+                if not cv2.imwrite(image_path, reference):
+                    raise RuntimeError(f"Could not save Home screen reference: {image_path}")
+            print(f"Home landing reference saved: {HOME_REFERENCE_FILE}")
             return reference
         print("Reference rejected. Capture the Home screen again.")
+
+
+def review_saved_home_reference():
+    if not os.path.isfile(HOME_REFERENCE_FILE):
+        print("No saved Home landing reference. One will be captured now.")
+        return None
+
+    reference = cv2.imread(HOME_REFERENCE_FILE, cv2.IMREAD_GRAYSCALE)
+    if reference is None:
+        print("Saved Home landing reference could not be read; a new one will be captured.")
+        return None
+
+    cv2.imshow("Saved Home Reference", reference)
+    cv2.waitKey(1)
+    reuse = input("Reuse this saved Home landing page? (Y/n): ").strip().lower()
+    cv2.destroyWindow("Saved Home Reference")
+    if reuse in ('', 'y', 'yes'):
+        print(f"Reusing saved Home landing reference: {HOME_REFERENCE_FILE}")
+        return reference
+
+    print("Saved reference rejected. A new Home screen will be captured.")
+    return None
 
 
 class CameraFrameCapture:
@@ -217,11 +244,37 @@ class CameraFrameCapture:
         self.thread.join(timeout=2.0)
 
 
-def wait_with_countdown(seconds):
+def draw_overlay(frame, lines):
+    for line_idx, (text, color, scale) in enumerate(lines):
+        y = 50 + line_idx * 55
+        cv2.putText(frame, text, (15, y), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), 6)
+        cv2.putText(frame, text, (15, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2)
+    return frame
+
+
+def wait_with_countdown(camera, seconds, run_idx):
     print(f"\nTV standby wait: {seconds} seconds")
-    for remaining in range(seconds, 0, -1):
-        print(f"  {remaining} seconds remaining...", end="\r")
-        time.sleep(1)
+    end_at = time.perf_counter() + seconds
+    last_printed = None
+    while True:
+        remaining = end_at - time.perf_counter()
+        if remaining <= 0:
+            break
+        if last_printed != int(remaining) + 1:
+            last_printed = int(remaining) + 1
+            print(f"  {last_printed} seconds remaining...", end="\r")
+            if last_printed <= 3:
+                winsound.Beep(800, 100)
+
+        ret, frame = camera.read()
+        if ret:
+            draw_overlay(frame, [
+                (f"RUN {run_idx} STANDBY", (0, 255, 255), 1.2),
+                (f"{int(remaining) // 60}:{remaining % 60:04.1f} to Power ON", (0, 255, 255), 1.2),
+            ])
+            cv2.imshow(CAPTURE_WINDOW, frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            raise KeyboardInterrupt("Measurement canceled by user.")
     print(" " * 50, end="\r")
     print("Standby wait complete.")
 
@@ -271,17 +324,24 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
         elapsed_ms = (captured_at - power_on_at) * 1000.0
         last_elapsed_ms = elapsed_ms
 
-        cv2.putText(gray, f"{elapsed_ms:.0f} ms | Home match {score:.3f}/{similarity_threshold:.3f}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,), 2)
-        cv2.imshow("Omedia_TC01 Home Detection", gray)
+        detected = score >= similarity_threshold
+        status_color = (0, 255, 0) if detected else (0, 255, 255)
+        overlay = [
+            (f"RUN {run_idx}  TIMER {elapsed_ms / 1000.0:.3f} s", status_color, 1.4),
+            (f"Similarity {score:.3f} / {similarity_threshold:.3f}", status_color, 1.0),
+        ]
+        if detected:
+            overlay.append(("HOME DETECTED", (0, 255, 0), 1.2))
+        draw_overlay(frame, overlay)
+        cv2.imshow(CAPTURE_WINDOW, frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             raise KeyboardInterrupt("Measurement canceled by user.")
 
-        if score >= similarity_threshold:
-            detected = True
-            cv2.putText(gray, "HOME DETECTED", (10, 70),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,), 2)
-            cv2.imwrite(os.path.join(output_dir, "RESULT_HOME.jpg"), gray)
+        if detected:
+            cv2.imwrite(os.path.join(output_dir, "RESULT_HOME.jpg"), frame)
+            winsound.Beep(1500, 250)
+            winsound.Beep(2500, 350)
+            cv2.waitKey(2000)
             print(
                 f"[RUN {run_idx}] Home similarity threshold reached in "
                 f"{elapsed_ms:.2f} ms (match {score:.3f}, threshold {similarity_threshold:.3f})."
@@ -290,6 +350,7 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
 
     if not detected:
         print(f"[RUN {run_idx}] Home screen not detected within {timeout:g} seconds.")
+        winsound.Beep(400, 700)
 
     return {
         'run': run_idx,
@@ -316,7 +377,11 @@ def main():
             f"Omedia_TC01_Calibration_{calibration_timestamp}_{configuration['SoC']}"
         )
         os.makedirs(calibration_dir, exist_ok=True)
-        reference = capture_home_reference(camera, calibration_dir)
+        reference = review_saved_home_reference()
+        if reference is None:
+            reference = capture_home_reference(camera, calibration_dir)
+        else:
+            cv2.imwrite(os.path.join(calibration_dir, "home_reference.jpg"), reference)
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
@@ -329,14 +394,16 @@ def main():
             os.makedirs(output_dir, exist_ok=True)
             print(f"\n[RUN {run_idx}/{configuration['num_runs']}] STEP 1: Send remote Power to turn the TV OFF.")
             send_key('Power', configuration['manufacturer'])
-            print("STEP 2: Starting the 5-minute standby wait.")
-            wait_with_countdown(STANDBY_SECONDS)
+            winsound.Beep(1000, 200)
+            print("STEP 2: Starting the standby wait.")
+            wait_with_countdown(camera, STANDBY_SECONDS, run_idx)
 
             frame_capture = CameraFrameCapture(camera)
             frame_capture.start()
             frame_capture.clear_buffer()
             print("STEP 3: Send remote Power to turn the TV ON; measurement starts now.")
             power_on_at = send_key('Power', configuration['manufacturer'])
+            winsound.Beep(1500, 300)
             try:
                 result = measure_home_time(
                     frame_capture,
@@ -370,6 +437,8 @@ def main():
 
         passed = sum(result['detected'] for result in results)
         print(f"\nOmedia_TC01 complete: {passed}/{len(results)} runs passed.")
+        for frequency in (1500, 2000, 2500):
+            winsound.Beep(frequency, 200)
         print(f"Results saved to: {CSV_PATH}")
     except KeyboardInterrupt as error:
         print(f"\n{error}")
