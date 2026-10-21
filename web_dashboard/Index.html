@@ -80,7 +80,8 @@
   .build-track { position: relative; height: 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .build-foot { font-size: 12px; }
   .build-foot b { font: 600 16px var(--font-display); }
-  .table-wrap { overflow-x: auto; max-height: 560px; }
+  .table-wrap { overflow: visible; }
+  @media (max-width: 900px) { .table-wrap { overflow-x: auto; } }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { padding: 7px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
   td { font: 13px var(--font-mono); }
@@ -184,7 +185,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b8</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b9</p>
 </div>
 
 <dialog id="player">
@@ -198,7 +199,8 @@
 <script>
 const REFRESH_MS = 30000;
 const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
-const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF'];
+// Directory and TC are left out: the download file names already carry the run folder name.
+const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'Directory', 'TC'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
@@ -543,8 +545,8 @@ function recordingCell(r) {
   const name = `${state.tc}_run${r.Run}_${r.Timestamp}`;
   return '<div class="rec">' +
     (r.Video ? `<button class="btn" data-play="${esc(r.Video)}" data-title="Run ${esc(r.Run)} · ${esc(r.Timestamp)}" data-gif="${esc(r.GIF || '')}" data-name="${esc(name)}">▶ Play</button>` +
-               `<a class="btn" href="${esc(r.Video)}" download="${esc(name)}.mp4">MP4</a>` : '') +
-    (r.GIF ? `<a class="btn" href="${esc(r.GIF)}" download="${esc(name)}.gif">GIF</a>` : '') + '</div>';
+               `<a class="btn" href="${esc(r.Video)}" download>↓ MP4</a>` : '') +
+    (r.GIF ? `<a class="btn" href="${esc(r.GIF)}" download>↓ GIF</a>` : '') + '</div>';
 }
 
 function openPlayer(button) {
@@ -552,8 +554,8 @@ function openPlayer(button) {
   const video = document.getElementById('player-video');
   document.getElementById('player-title').textContent = button.dataset.title;
   document.getElementById('player-links').innerHTML =
-    `<a class="btn" href="${esc(button.dataset.play)}" download="${esc(button.dataset.name)}.mp4">Download MP4</a>` +
-    (button.dataset.gif ? `<a class="btn" href="${esc(button.dataset.gif)}" download="${esc(button.dataset.name)}.gif">Download GIF</a>` : '') +
+    `<a class="btn" href="${esc(button.dataset.play)}" download>↓ MP4</a>` +
+    (button.dataset.gif ? `<a class="btn" href="${esc(button.dataset.gif)}" download>↓ GIF</a>` : '') +
     '<button class="btn" id="player-close">Close</button>';
   document.getElementById('player-close').onclick = () => dialog.close();
   video.src = button.dataset.play;
