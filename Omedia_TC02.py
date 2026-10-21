@@ -2,8 +2,8 @@
 
 Setup (two inputs, same way each time: click on the live camera view, then Enter):
   1. Home: click the Samsung TV Plus card (Down) or its bottom app icon (Down, Down), as in PACE_01; OK.
-  2. TV Plus: click the Live TV channel; the camera walks the focus there (or finish with the
-     keyboard arrow keys); OK enters the channel.
+  2. TV Plus: click the highlighted item, then the Live TV channel. The planned keys (e.g. Down x1,
+     Right x2) are drawn on screen first; arrow keys adjust them; Enter sends exactly those keys + OK.
   The middle of the playing picture is used to detect playback; its motion sets the threshold.
 Each run:
   2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
@@ -22,7 +22,6 @@ import time
 import winsound
 from datetime import datetime
 
-import focus_navigator as nav
 from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
@@ -41,7 +40,8 @@ DEFAULT_CONFIGURATION = {
     'zap_interval_seconds': 8,
     'route': [],
     'target_point': [],
-    'channel_point': [],
+    'channel_clicks': [],
+    'channel_route': [],
     'stream_roi': [],
     'motion_threshold': 0.0,
 }
@@ -62,6 +62,7 @@ STREAM_CONFIRM_FRAMES = 3       # consecutive moving frames needed; the first on
 STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
 MIN_STILL_FRAMES = 2            # after Ch Up the picture must stop (black/frozen) this many frames first
 ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
+TILE_STEP_RATIO = 1.15         # fallback step (tile size + gap) when the next tile cannot be measured
 PRE_ROLL_SECONDS = 2.0
 HOME_SETTLE_SECONDS = 3
 KEY_GAP_SECONDS = 0.5
@@ -390,27 +391,119 @@ def auto_stream_roi(frame_shape):
     return [int(w * 0.20), int(h * 0.22), int(w * 0.60), int(h * 0.50)]
 
 
-def grab_still(camera, label=None):
-    """Settled median frame, also shown in the capture window."""
-    frame = nav.settle_and_grab(lambda: read_frame(camera))
-    preview = frame.copy()
-    if label:
-        draw_overlay(preview, [(label, (255, 255, 255), 1.0)])
-    cv2.imshow(CAPTURE_WINDOW, preview)
-    cv2.waitKey(1)
-    return frame
+def flood_box(frame, point):
+    """Box of the uniform-colour area under `point` if it looks like a tile, else None."""
+    h, w = frame.shape[:2]
+    x, y = int(point[0]), int(point[1])
+    if not (0 <= x < w and 0 <= y < h):
+        return None
+    blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+    flags = 4 | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
+    cv2.floodFill(blurred, mask, (x, y), 0, (14, 14, 14), (14, 14, 14), flags)
+    ys, xs = np.nonzero(mask[1:-1, 1:-1])
+    if not len(xs):
+        return None
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    if 0.03 * w <= bw <= 0.5 * w and 0.03 * h <= bh <= 0.5 * h:
+        return int(x0), int(y0), int(bw), int(bh)
+    return None
 
 
-def select_live_tv(camera, saved_point=None):
-    """Same as the TV Plus selection: live camera view, click the Live TV channel, Enter."""
+def tile_box_at(frame, point):
+    """Box of the tile under `point`; a typical tile size centred on the click if it cannot be isolated."""
+    box = flood_box(frame, point)
+    if box is not None:
+        return box
+    h, w = frame.shape[:2]
+    bw, bh = int(0.15 * w), int(0.18 * h)
+    return int(point[0] - bw / 2), int(point[1] - bh / 2), bw, bh
+
+
+def measure_step(frame, tile, axis, sign):
+    """Distance from the focused tile to the next tile of similar size along one axis (tile + gap)."""
+    x, y, w, h = tile
+    size = w if axis == 0 else h
+    centre = (x + w / 2.0, y + h / 2.0)
+    edge = (x + w if sign > 0 else x) if axis == 0 else (y + h if sign > 0 else y)
+    for offset in range(3, int(size * 1.5), 3):
+        probe = [centre[0], centre[1]]
+        probe[axis] = edge + sign * offset
+        box = flood_box(frame, probe)
+        if box is None:
+            continue
+        other = box[2] if axis == 0 else box[3]
+        if 0.6 * size <= other <= 1.6 * size:
+            start = box[0] if axis == 0 else box[1]
+            own = x if axis == 0 else y
+            if sign < 0:
+                start, own = own, start
+            step = start - own
+            if step > 0.8 * size:
+                return float(step)
+    return size * TILE_STEP_RATIO
+
+
+def plan_moves(frame, focus_point, target_point, tile_box):
+    """Rows and columns from the focused item to the target, stepping by the measured tile pitch."""
+    dx = target_point[0] - focus_point[0]
+    dy = target_point[1] - focus_point[1]
+    step_x = measure_step(frame, tile_box, 0, 1 if dx >= 0 else -1)
+    step_y = measure_step(frame, tile_box, 1, 1 if dy >= 0 else -1)
+    rows = int(round(dy / step_y))
+    cols = int(round(dx / step_x))
+    return rows, cols, (step_x, step_y)
+
+
+def route_from_plan(rows, cols):
+    """Vertical moves first, then horizontal (the same order the plan is drawn)."""
+    return (['Down'] * rows if rows > 0 else ['Up'] * -rows) + (['Right'] * cols if cols > 0 else ['Left'] * -cols)
+
+
+def draw_plan(image, focus_point, rows, cols, steps):
+    """Dots on every tile the focus will pass, arrows between them, a ring on the end tile."""
+    step_x, step_y = steps
+    points = [tuple(int(v) for v in focus_point)]
+    x, y = focus_point
+    for _ in range(abs(rows)):
+        y += step_y if rows > 0 else -step_y
+        points.append((int(x), int(y)))
+    for _ in range(abs(cols)):
+        x += step_x if cols > 0 else -step_x
+        points.append((int(x), int(y)))
+    for start, end in zip(points, points[1:]):
+        cv2.arrowedLine(image, start, end, (0, 255, 255), 3, tipLength=0.25)
+    for point in points[1:-1]:
+        cv2.circle(image, point, 6, (0, 255, 255), -1)
+    cv2.circle(image, points[0], 10, (255, 255, 255), 3)
+    cv2.circle(image, points[-1], 18, (0, 255, 0), 4)
+    return image
+
+
+def select_live_tv(camera, saved=None):
+    """Input 2: click the highlighted item, then the Live TV channel; the planned keys are drawn first.
+
+    Arrow keys adjust the plan, R starts over, Enter sends exactly the planned keys.
+    Returns (route, focus_point, target_point).
+    """
     window_name = "Select Live TV channel"
-    selection = {'point': tuple(saved_point) if saved_point else None}
+    clicks = list(saved or [])
+    plan = {'rows': 0, 'cols': 0, 'steps': None, 'tile': None}
+
+    def replan(frame):
+        plan['tile'] = tile_box_at(frame, clicks[0])
+        plan['rows'], plan['cols'], plan['steps'] = plan_moves(frame, clicks[0], clicks[1], plan['tile'])
 
     def on_mouse(event, x, y, flags, parameter):
         if event == cv2.EVENT_LBUTTONDOWN:
-            selection['point'] = (x, y)
+            if len(clicks) >= 2:
+                clicks.clear()
+                plan['steps'] = None
+            clicks.append((x, y))
 
-    print("\n[SETUP] When TV Plus has loaded, click the Live TV channel to enter, then press Enter (Q = cancel).")
+    print("\n[SETUP] When TV Plus has loaded: click (1) the item that is highlighted now, then (2) the Live TV "
+          "channel. Check the planned moves on screen; arrow keys adjust, R = start over, Enter = go (Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
@@ -418,69 +511,59 @@ def select_live_tv(camera, saved_point=None):
         if frame is None:
             continue
         preview = frame.copy()
-        if selection['point'] is None:
-            lines = [("Click the Live TV channel, then press ENTER", (0, 255, 0), 1.0)]
+        if len(clicks) == 0:
+            lines = [("1) Click the item that is HIGHLIGHTED now", (0, 255, 0), 1.0)]
+        elif len(clicks) == 1:
+            cv2.circle(preview, clicks[0], 10, (255, 255, 255), 3)
+            lines = [("2) Click the Live TV channel to enter", (0, 255, 0), 1.0)]
         else:
-            cv2.circle(preview, selection['point'], 12, (0, 255, 0), 3)
-            lines = [("Live TV channel selected.  ENTER = go", (0, 255, 0), 1.0)]
+            if plan['steps'] is None:
+                replan(frame)
+            x, y, w, h = plan['tile']
+            cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 255, 255), 1)
+            draw_plan(preview, clicks[0], plan['rows'], plan['cols'], plan['steps'])
+            route = route_from_plan(plan['rows'], plan['cols'])
+            lines = [(f"Planned: {describe_route(route)} + OK", (0, 255, 255), 1.0),
+                     ("Arrow keys adjust,  R = start over,  ENTER = go", (255, 255, 255), 0.8)]
         cv2.imshow(window_name, draw_overlay(preview, lines))
-        key = cv2.waitKey(30) & 0xFF
-        if key in (10, 13) and selection['point'] is not None:
+        code = cv2.waitKeyEx(30)
+        if code in ARROW_KEYS and len(clicks) == 2:
+            key = ARROW_KEYS[code]
+            plan['rows'] += {'Down': 1, 'Up': -1}.get(key, 0)
+            plan['cols'] += {'Right': 1, 'Left': -1}.get(key, 0)
+        elif code in (10, 13) and len(clicks) == 2:
             cv2.destroyWindow(window_name)
-            return selection['point']
-        if key == ord('q'):
+            route = route_from_plan(plan['rows'], plan['cols'])
+            print(f"[SETUP] Planned keys to the Live TV channel: {describe_route(route)} + OK")
+            return route, clicks[0], clicks[1]
+        elif code in (ord('r'), ord('R')):
+            clicks.clear()
+            plan['steps'] = None
+        elif code in (ord('q'), ord('Q')):
             cv2.destroyWindow(window_name)
             raise KeyboardInterrupt("Live TV selection canceled.")
 
 
-def keyboard_drive(configuration, camera, pressed):
-    """Arrow keys in the camera window move the TV focus (sent as IR); Enter when on the channel."""
-    print("[SETUP] Use the arrow keys in the camera window to move to the channel, then press Enter "
-          "(Backspace = undo last move).")
-    manufacturer = configuration['manufacturer']
-    while True:
-        frame = read_frame(camera)
-        if frame is not None:
-            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [
-                ("Arrow keys = move,  ENTER = this channel,  Backspace = undo", (0, 255, 0), 1.0),
-                (f"Keys: {' '.join(pressed[-12:])}", (255, 255, 255), 0.8),
-            ]))
-        code = cv2.waitKeyEx(1)
-        if code in ARROW_KEYS:
-            key = ARROW_KEYS[code]
-            send_key(key, manufacturer)
-            pressed.append(key)
-        elif code in (8, 0x2E0000) and pressed:          # Backspace / Delete: undo the last move
-            undo = nav.OPPOSITE.get(pressed[-1])
-            if undo:
-                send_key(undo, manufacturer)
-                pressed.append(undo)
-        elif code in (10, 13):
-            return pressed
+def describe_route(route):
+    """['Down', 'Right', 'Right'] -> 'Down x1, Right x2'."""
+    parts = []
+    for key in route:
+        if parts and parts[-1][0] == key:
+            parts[-1][1] += 1
+        else:
+            parts.append([key, 1])
+    return ', '.join(f"{key} x{count}" for key, count in parts) or '(no move)'
 
 
-def go_to_live_tv(configuration, camera, calibration_dir):
-    """Input 2: click the Live TV channel; the camera walks the focus there, then OK enters it."""
-    point = select_live_tv(camera, configuration['channel_point'] or None)
-    configuration['channel_point'] = [int(point[0]), int(point[1])]
+def go_to_live_tv(configuration, camera):
+    """Input 2: plan on screen, then send exactly the planned keys and OK (no camera decisions while moving)."""
+    saved = configuration['channel_clicks'] or None
+    route, focus_point, target_point = select_live_tv(camera, [tuple(p) for p in saved] if saved else None)
+    configuration['channel_clicks'] = [[int(v) for v in focus_point], [int(v) for v in target_point]]
+    configuration['channel_route'] = route
     save_configuration(CONFIG_FILE, configuration)
-    manufacturer = configuration['manufacturer']
-    pressed = []
-
-    def press(key):
-        send_key(key, manufacturer)
-        pressed.append(key)
-
-    try:
-        nav.navigate_to_target(press, lambda: grab_still(camera, "Moving to the Live TV channel..."), point,
-                               debug_dir=os.path.join(calibration_dir, "nav_live_tv"))
-    except RuntimeError as error:
-        print(f"[SETUP] Automatic move failed: {error}")
-    answer = input("Is the Live TV channel focused? (Y = enter it / k = move with arrow keys): ").strip().lower()
-    if answer == 'k':
-        keyboard_drive(configuration, camera, pressed)
-    print(f"[SETUP] Keys to the Live TV channel: {', '.join(pressed) or '(no move)'} + OK")
-    send_key('OK', manufacturer)
+    replay_route(route, configuration['manufacturer'], camera)
+    send_key('OK', configuration['manufacturer'])
 
 
 def wait_until_playing(camera, message):
@@ -752,7 +835,7 @@ def main():
         replay_route(route, configuration['manufacturer'], camera)
         send_key('OK', configuration['manufacturer'])
         # Input 2: the Live TV channel inside TV Plus, then OK.
-        go_to_live_tv(configuration, camera, calibration_dir)
+        go_to_live_tv(configuration, camera)
         roi, motion_threshold = calibrate_playback(configuration, camera, calibration_dir)
 
         results = []
