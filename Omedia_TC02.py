@@ -1,3 +1,15 @@
+"""Omedia_TC02 - Samsung TV Plus launch time.
+
+Calibration (once, reused afterwards):
+  1. Home is shown; click Samsung TV Plus on the camera image.
+  2. The program walks the focus there with D-pad keys, watching the focus highlight on camera,
+     and saves the key route plus an image of the focused tile.
+  3. TV Plus is launched once to capture the "fully loaded" landing reference.
+Each run:
+  Power cycle (optional) -> Home -> replay the route -> confirm TV Plus is focused ->
+  record 2 s of pre-roll -> OK starts the timer -> stop when the landing similarity reaches the
+  threshold. Frames, MP4/GIF, CSV row, and upload are the same as Omedia_TC01.
+"""
 import cv2
 import numpy as np
 import os
@@ -9,6 +21,7 @@ import time
 import winsound
 from datetime import datetime
 
+import focus_navigator as nav
 from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
@@ -17,15 +30,19 @@ from run_video import make_run_videos
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_config.json")
-HOME_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_home_reference.jpg")
+LANDING_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_landing_reference.jpg")
+FOCUS_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_focus_reference.jpg")
 DEFAULT_CONFIGURATION = {
-    'manufacturer': 'LG',
-    'SoC': 'O22N3',
-    'SWV': '33.31.22',
-    'LGCV': '4.0.18-1',
+    'manufacturer': 'Samsung',
+    'SoC': 'U8000',
+    'SWV': '1300',
+    'LGCV': '8.2.008',
     'num_runs': 5,
-    'timeout': 180.0,
-    'home_similarity_threshold': 0.7,
+    'timeout': 30.0,
+    'landing_similarity_threshold': 0.7,
+    'standby_seconds': 30,
+    'route': [],
+    'target_point': [],
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
@@ -34,18 +51,36 @@ RAW_IR_KEYSETS = {
     'Roku': ROKU_KEYS,
     'Samsung': SAMSUNG_KEYS,
 }
+APP_NAME = "Samsung TV Plus"
 CAMERA_INDEX = 1
-STANDBY_SECONDS = 300
 CAPTURE_WINDOW = "Omedia_TC02 Capture"
 FRAME_CAPTURE_SIMILARITY = 0.85
 PRE_ROLL_SECONDS = 2.0
+BOOT_WAIT_SECONDS = 20
+HOME_SETTLE_SECONDS = 5
+KEY_GAP_SECONDS = 1.0
+EXIT_WAIT_SECONDS = 3
+FOCUS_MATCH_THRESHOLD = 0.8
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC02_response.csv")
+
+
+def ask_number(prompt, default, cast, valid):
+    while True:
+        text = input(f"{prompt} (default: {default:g}): ").strip()
+        try:
+            value = cast(text) if text else default
+        except ValueError:
+            print("Please enter a valid number.")
+            continue
+        if valid(value):
+            return value
+        print("That value is out of range.")
 
 
 def get_user_configuration():
     defaults = load_saved_configuration(CONFIG_FILE, DEFAULT_CONFIGURATION)
     print("\n" + "=" * 60)
-    print("  Omedia_TC02 - Home Screen Wake Time")
+    print(f"  Omedia_TC02 - {APP_NAME} Launch Time")
     print("=" * 60)
 
     while True:
@@ -58,51 +93,30 @@ def get_user_configuration():
     SoC = input(f"Enter SoC Model (default: {defaults['SoC']}): ").strip() or defaults['SoC']
     SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
+    num_runs = ask_number("Enter number of runs", defaults['num_runs'], int, lambda v: v > 0)
+    timeout = ask_number("Enter launch timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
+    threshold = ask_number("Enter landing similarity threshold (0-1)",
+                           defaults['landing_similarity_threshold'], float, lambda v: 0 < v <= 1)
+    standby_seconds = ask_number("Enter TV standby seconds before each run (0 = no power cycle)",
+                                 defaults['standby_seconds'], int, lambda v: v >= 0)
 
-    while True:
-        try:
-            num_runs = int(input(f"Enter number of runs (default: {defaults['num_runs']}): ").strip() or str(defaults['num_runs']))
-            if num_runs > 0:
-                break
-            print("Please enter a positive number.")
-        except ValueError:
-            print("Please enter a valid number.")
-
-    while True:
-        try:
-            timeout = float(input(f"Enter wake timeout in seconds (default: {defaults['timeout']:g}): ").strip() or str(defaults['timeout']))
-            if timeout > 0:
-                break
-            print("Please enter a positive number.")
-        except ValueError:
-            print("Please enter a valid number.")
-
-    while True:
-        try:
-            home_similarity_threshold = float(
-                input(
-                    "Enter Home screen similarity threshold (0-1, "
-                    f"default: {defaults['home_similarity_threshold']:g}): "
-                ).strip() or str(defaults['home_similarity_threshold'])
-            )
-            if 0 < home_similarity_threshold <= 1:
-                break
-            print("Enter a value greater than 0 and at most 1.")
-        except ValueError:
-            print("Please enter a valid number.")
-
-    configuration = {
+    configuration = dict(defaults)
+    configuration.update({
         'manufacturer': manufacturer,
         'SoC': SoC,
         'SWV': SWV,
         'LGCV': LGCV,
         'num_runs': num_runs,
         'timeout': timeout,
-        'home_similarity_threshold': home_similarity_threshold,
-    }
+        'landing_similarity_threshold': threshold,
+        'standby_seconds': standby_seconds,
+    })
     print("\nConfiguration:")
-    for key, value in configuration.items():
-        print(f"  {key}: {value}")
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout',
+                'landing_similarity_threshold', 'standby_seconds'):
+        print(f"  {key}: {configuration[key]}")
+    if configuration['route']:
+        print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
     if input("Confirm and proceed? (Y/n): ").strip().lower() == 'n':
         return get_user_configuration()
 
@@ -143,58 +157,20 @@ def position_camera(camera):
             return False
 
 
-def capture_home_reference(camera, output_dir):
-    reference_path = os.path.join(output_dir, "home_reference.jpg")
-    while True:
-        print("\nEnsure the TV is ON and showing its Home screen.")
-        input("When the Home screen is stable, press Enter to capture it: ")
-
-        samples = []
-        start_time = time.perf_counter()
-        while time.perf_counter() - start_time < 2.0:
-            ret, frame = camera.read()
-            if ret:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                samples.append(cv2.GaussianBlur(gray, (5, 5), 0))
-            time.sleep(0.05)
-
-        if not samples:
-            raise RuntimeError("Could not capture the Home screen reference.")
-
-        reference = np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
-        cv2.imshow("Home Reference Preview", reference)
-        cv2.waitKey(1)
-        approval = input("Use this captured Home screen as the landing reference? (Y/n): ").strip().lower()
-        cv2.destroyWindow("Home Reference Preview")
-        if approval in ('', 'y', 'yes'):
-            for image_path in (reference_path, HOME_REFERENCE_FILE):
-                if not cv2.imwrite(image_path, reference):
-                    raise RuntimeError(f"Could not save Home screen reference: {image_path}")
-            print(f"Home landing reference saved: {HOME_REFERENCE_FILE}")
-            return reference
-        print("Reference rejected. Capture the Home screen again.")
+def read_frame(camera):
+    ret, frame = camera.read()
+    return frame if ret else None
 
 
-def review_saved_home_reference():
-    if not os.path.isfile(HOME_REFERENCE_FILE):
-        print("No saved Home landing reference. One will be captured now.")
-        return None
-
-    reference = cv2.imread(HOME_REFERENCE_FILE, cv2.IMREAD_GRAYSCALE)
-    if reference is None:
-        print("Saved Home landing reference could not be read; a new one will be captured.")
-        return None
-
-    cv2.imshow("Saved Home Reference", reference)
+def grab_still(camera, label=None):
+    """Settled median frame, also shown in the capture window."""
+    frame = nav.settle_and_grab(lambda: read_frame(camera))
+    preview = frame.copy()
+    if label:
+        draw_overlay(preview, [(label, (255, 255, 255), 1.0)])
+    cv2.imshow(CAPTURE_WINDOW, preview)
     cv2.waitKey(1)
-    reuse = input("Reuse this saved Home landing page? (Y/n): ").strip().lower()
-    cv2.destroyWindow("Saved Home Reference")
-    if reuse in ('', 'y', 'yes'):
-        print(f"Reusing saved Home landing reference: {HOME_REFERENCE_FILE}")
-        return reference
-
-    print("Saved reference rejected. A new Home screen will be captured.")
-    return None
+    return frame
 
 
 class CameraFrameCapture:
@@ -276,8 +252,8 @@ def draw_overlay(frame, lines):
     return frame
 
 
-def wait_with_countdown(camera, seconds, run_idx):
-    print(f"\nTV standby wait: {seconds} seconds")
+def wait_with_countdown(camera, seconds, run_idx, title, until):
+    print(f"\n{title}: {seconds} seconds")
     end_at = time.perf_counter() + seconds
     last_printed = None
     while True:
@@ -293,14 +269,14 @@ def wait_with_countdown(camera, seconds, run_idx):
         ret, frame = camera.read()
         if ret:
             draw_overlay(frame, [
-                (f"RUN {run_idx} STANDBY", (0, 255, 255), 1.2),
-                (f"{int(remaining) // 60}:{remaining % 60:04.1f} to Power ON", (0, 255, 255), 1.2),
+                (f"RUN {run_idx} {title.upper()}", (0, 255, 255), 1.2),
+                (f"{int(remaining) // 60}:{remaining % 60:04.1f} to {until}", (0, 255, 255), 1.2),
             ])
             cv2.imshow(CAPTURE_WINDOW, frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             raise KeyboardInterrupt("Measurement canceled by user.")
     print(" " * 50, end="\r")
-    print("Standby wait complete.")
+    print(f"{title} complete.")
 
 
 def send_key(key_name, manufacturer):
@@ -352,19 +328,249 @@ class FrameWriter:
         self.thread.join()
 
 
-def home_similarity(frame, reference):
+def screen_similarity(frame, reference):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
-        raise RuntimeError("Camera frame is smaller than the saved Home reference.")
+        raise RuntimeError("Camera frame is smaller than the saved landing reference.")
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
-def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
-    """Before Power ON, confirm the screen does not already match Home (i.e. the TV really is off).
+# ---------- calibration: route to Samsung TV Plus ----------
 
-    The frames seen here are returned too, so the run video can start PRE_ROLL_SECONDS before Power ON.
-    """
+def click_target(camera):
+    """Show the Home screen and let the user click Samsung TV Plus. Returns the point in frame pixels."""
+    window_name = f"Click {APP_NAME}"
+    still = grab_still(camera)
+    selection = {'point': None}
+
+    def on_mouse(event, x, y, flags, parameter):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            selection['point'] = (x, y)
+
+    print(f"\n[SETUP] Click {APP_NAME} on the Home screen image, then press Enter (R = refresh image, Q = cancel).")
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    cv2.setMouseCallback(window_name, on_mouse)
+    while True:
+        preview = still.copy()
+        message = f"Click {APP_NAME}, then press ENTER" if selection['point'] is None else "ENTER = go there,  click again to change"
+        draw_overlay(preview, [(message, (0, 255, 0), 1.0)])
+        if selection['point'] is not None:
+            cv2.drawMarker(preview, selection['point'], (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
+            cv2.circle(preview, selection['point'], 16, (0, 255, 0), 2)
+        cv2.imshow(window_name, preview)
+        key = cv2.waitKey(30) & 0xFF
+        if key in (10, 13) and selection['point'] is not None:
+            cv2.destroyWindow(window_name)
+            return selection['point']
+        if key == ord('r'):
+            still = grab_still(camera)
+        if key == ord('q'):
+            cv2.destroyWindow(window_name)
+            raise KeyboardInterrupt("Target selection canceled.")
+
+
+def show_and_confirm(frame, title, lines, box=None, point=None):
+    preview = frame.copy()
+    if box is not None:
+        x, y, w, h = box
+        cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 2)
+    if point is not None:
+        cv2.drawMarker(preview, tuple(int(v) for v in point), (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
+    draw_overlay(preview, lines)
+    cv2.imshow(title, preview)
+    cv2.waitKey(1)
+
+
+def parse_route(text):
+    aliases = {'u': 'Up', 'up': 'Up', 'd': 'Down', 'dn': 'Down', 'down': 'Down',
+               'l': 'Left', 'left': 'Left', 'r': 'Right', 'rt': 'Right', 'right': 'Right'}
+    route = []
+    for part in text.replace(' ', ',').split(','):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if part not in aliases:
+            raise ValueError(f"Unknown key '{part}'. Use Up, Down, Left, Right.")
+        route.append(aliases[part])
+    return route
+
+
+def press_home(manufacturer, camera):
+    send_key('Home', manufacturer)
+    wait_until = time.perf_counter() + HOME_SETTLE_SECONDS
+    while time.perf_counter() < wait_until:
+        frame = read_frame(camera)
+        if frame is not None:
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [("Waiting for Home screen...", (255, 255, 255), 1.0)]))
+        cv2.waitKey(1)
+
+
+def replay_route(route, manufacturer, camera):
+    for key in route:
+        send_key(key, manufacturer)
+        end = time.perf_counter() + KEY_GAP_SECONDS
+        while time.perf_counter() < end:
+            frame = read_frame(camera)
+            if frame is not None:
+                cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [(f"Route: {', '.join(route)}", (255, 255, 255), 0.9)]))
+            cv2.waitKey(1)
+
+
+def auto_navigate(configuration, camera, target_point):
+    manufacturer = configuration['manufacturer']
+
+    def press(key):
+        send_key(key, manufacturer)
+
+    return nav.navigate_to_target(press, lambda: grab_still(camera, f"Finding {APP_NAME}..."), target_point)
+
+
+def calibrate_route(configuration, camera, calibration_dir):
+    """Find (or reuse) the D-pad route from Home to Samsung TV Plus and the focused-tile image."""
+    manufacturer = configuration['manufacturer']
+    saved_focus = cv2.imread(FOCUS_REFERENCE_FILE) if os.path.isfile(FOCUS_REFERENCE_FILE) else None
+    if configuration['route'] and configuration['target_point'] and saved_focus is not None:
+        print(f"\n[SETUP] Saved route to {APP_NAME}: {', '.join(configuration['route'])}")
+        if input("Reuse the saved route? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
+            return configuration['route'], tuple(configuration['target_point']), saved_focus
+
+    while True:
+        press_home(manufacturer, camera)
+        target_point = click_target(camera)
+        route, focus_frame, focus_box = [], None, None
+        try:
+            route, focus_frame, focus_box = auto_navigate(configuration, camera, target_point)
+        except RuntimeError as error:
+            print(f"[SETUP] Automatic navigation failed: {error}")
+            focus_frame = grab_still(camera)
+
+        lines = [(f"Route: {', '.join(route) or '(none)'}", (0, 255, 255), 1.0),
+                 (f"Is {APP_NAME} focused?  Answer in the console.", (255, 255, 255), 0.9)]
+        show_and_confirm(focus_frame, "Route Check", lines, focus_box, target_point)
+        answer = input(f"Is {APP_NAME} focused now? (Y = save / n = try again / m = type the route): ").strip().lower()
+        cv2.destroyWindow("Route Check")
+        if answer == 'm':
+            while True:
+                try:
+                    route = parse_route(input("Route from Home, e.g. Down,Down,Right: "))
+                    break
+                except ValueError as error:
+                    print(error)
+            press_home(manufacturer, camera)
+            replay_route(route, manufacturer, camera)
+            focus_frame = grab_still(camera)
+            show_and_confirm(focus_frame, "Route Check", [(f"Route: {', '.join(route)}", (0, 255, 255), 1.0)],
+                             point=target_point)
+            answer = input(f"Is {APP_NAME} focused now? (Y/n): ").strip().lower()
+            cv2.destroyWindow("Route Check")
+        if answer in ('', 'y', 'yes') and focus_frame is not None:
+            break
+        print("[SETUP] Let's try again from the Home screen.")
+
+    # The calibration route was found from wherever the focus started; check that replaying it
+    # from a fresh Home press lands on the target too.
+    press_home(manufacturer, camera)
+    replay_route(route, manufacturer, camera)
+    replay_frame = grab_still(camera)
+    score = nav.region_similarity(focus_frame, replay_frame, target_point)
+    print(f"[SETUP] Replaying the route from Home: focus match {score:.2f} (needs {FOCUS_MATCH_THRESHOLD:.2f})")
+    if score < FOCUS_MATCH_THRESHOLD:
+        print("[SETUP] The route does not land on the same tile after Home; each run will re-find "
+              f"{APP_NAME} with the camera if the replayed route misses.")
+
+    for path in (FOCUS_REFERENCE_FILE, os.path.join(calibration_dir, "focus_reference.jpg")):
+        cv2.imwrite(path, focus_frame)
+    configuration['route'] = route
+    configuration['target_point'] = [int(target_point[0]), int(target_point[1])]
+    save_configuration(CONFIG_FILE, configuration)
+    print(f"[SETUP] Saved route to {APP_NAME}: {', '.join(route)}")
+    return route, target_point, focus_frame
+
+
+def focus_on_target(configuration, camera, route, target_point, focus_reference, run_idx):
+    """Home -> route; confirm the focus with the camera, re-finding the target once if needed."""
+    manufacturer = configuration['manufacturer']
+    press_home(manufacturer, camera)
+    replay_route(route, manufacturer, camera)
+    frame = grab_still(camera, f"RUN {run_idx}: checking focus on {APP_NAME}")
+    score = nav.region_similarity(focus_reference, frame, target_point)
+    print(f"[RUN {run_idx}] Focus match on {APP_NAME}: {score:.2f}")
+    if score >= FOCUS_MATCH_THRESHOLD:
+        return True, frame
+    print(f"[RUN {run_idx}] Route missed {APP_NAME}; finding it with the camera...")
+    try:
+        press_home(manufacturer, camera)
+        _, frame, _ = auto_navigate(configuration, camera, target_point)
+    except RuntimeError as error:
+        print(f"[RUN {run_idx}] {error}")
+        return False, grab_still(camera)
+    score = nav.region_similarity(focus_reference, frame, target_point)
+    print(f"[RUN {run_idx}] Focus match after re-finding: {score:.2f}")
+    return score >= FOCUS_MATCH_THRESHOLD, frame
+
+
+# ---------- calibration: landing reference ----------
+
+def capture_landing_reference(camera, manufacturer, output_dir):
+    reference_path = os.path.join(output_dir, "landing_reference.jpg")
+    while True:
+        print(f"\n[SETUP] Launching {APP_NAME} once (not measured) to capture its loaded screen.")
+        send_key('OK', manufacturer)
+        print(f"Wait until {APP_NAME} has fully loaded (video/guide showing).")
+        input("Then press Enter to capture it: ")
+
+        samples = []
+        start_time = time.perf_counter()
+        while time.perf_counter() - start_time < 2.0:
+            ret, frame = camera.read()
+            if ret:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                samples.append(cv2.GaussianBlur(gray, (5, 5), 0))
+            time.sleep(0.05)
+        if not samples:
+            raise RuntimeError("Could not capture the landing reference.")
+
+        reference = np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
+        cv2.imshow("Landing Reference Preview", reference)
+        cv2.waitKey(1)
+        approval = input(f"Use this as the {APP_NAME} loaded reference? (Y/n): ").strip().lower()
+        cv2.destroyWindow("Landing Reference Preview")
+        if approval in ('', 'y', 'yes'):
+            for image_path in (reference_path, LANDING_REFERENCE_FILE):
+                if not cv2.imwrite(image_path, reference):
+                    raise RuntimeError(f"Could not save landing reference: {image_path}")
+            print(f"Landing reference saved: {LANDING_REFERENCE_FILE}")
+            return reference
+        print("Reference rejected. Going back to Home to try again.")
+        send_key('Home', manufacturer)
+        time.sleep(HOME_SETTLE_SECONDS)
+        input(f"Make sure {APP_NAME} is focused on the Home screen, then press Enter: ")
+
+
+def review_saved_landing_reference():
+    if not os.path.isfile(LANDING_REFERENCE_FILE):
+        print(f"No saved {APP_NAME} landing reference. One will be captured now.")
+        return None
+    reference = cv2.imread(LANDING_REFERENCE_FILE, cv2.IMREAD_GRAYSCALE)
+    if reference is None:
+        print("Saved landing reference could not be read; a new one will be captured.")
+        return None
+    cv2.imshow("Saved Landing Reference", reference)
+    cv2.waitKey(1)
+    reuse = input(f"Reuse this saved {APP_NAME} landing screen? (Y/n): ").strip().lower()
+    cv2.destroyWindow("Saved Landing Reference")
+    if reuse in ('', 'y', 'yes'):
+        print(f"Reusing saved landing reference: {LANDING_REFERENCE_FILE}")
+        return reference
+    print("Saved reference rejected. A new landing screen will be captured.")
+    return None
+
+
+# ---------- measurement ----------
+
+def check_not_launched(frame_capture, reference, similarity_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
+    """Before OK, confirm TV Plus is not already showing; the frames double as the video pre-roll."""
     frame_capture.clear_buffer()
     max_score = None
     last_frame = None
@@ -374,28 +580,29 @@ def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, sec
         captured = frame_capture.get_frame(timeout=1.0)
         if captured is None:
             if time.perf_counter() > end_at + 2.0:
-                raise RuntimeError("No camera frames during the TV-off check.")
+                raise RuntimeError("No camera frames during the pre-launch check.")
             continue
         captured_at, frame = captured
-        score = home_similarity(frame, reference)
+        score = screen_similarity(frame, reference)
         max_score = score if max_score is None else max(max_score, score)
         last_frame = frame
         pre_frames.append((captured_at, frame.copy(), score))
 
-    tv_off = max_score < similarity_threshold
+    ready = max_score < similarity_threshold
     last_frame = last_frame.copy()
     draw_overlay(last_frame, [
         (f"PRE-CHECK  similarity {max_score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
-        ("TV OFF - OK" if tv_off else "TV NOT OFF - RUN INVALID", (0, 255, 0) if tv_off else (0, 0, 255), 1.2),
+        ("READY - OK" if ready else f"{APP_NAME} ALREADY SHOWING - RUN INVALID",
+         (0, 255, 0) if ready else (0, 0, 255), 1.2),
     ])
-    cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_POWER_ON.jpg"), last_frame)
+    cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_OK.jpg"), last_frame)
     cv2.imshow(CAPTURE_WINDOW, last_frame)
     cv2.waitKey(1)
-    return tv_off, max_score, pre_frames
+    return ready, max_score, pre_frames
 
 
-def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
-                      similarity_threshold, power_on_at, pre_frames=()):
+def measure_launch_time(frame_capture, reference, run_idx, output_dir, timeout,
+                        similarity_threshold, ok_pressed_at, pre_frames=()):
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
@@ -403,39 +610,38 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
     detected_elapsed_ms = None
     frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
 
-    # Pre-roll: the last PRE_ROLL_SECONDS before Power ON, saved with negative elapsed time for the video.
+    # Pre-roll: the last PRE_ROLL_SECONDS before OK, saved with negative elapsed time for the video.
     pre_index = 0
     for captured_at, frame, score in pre_frames:
-        elapsed_ms = (captured_at - power_on_at) * 1000.0
+        elapsed_ms = (captured_at - ok_pressed_at) * 1000.0
         if elapsed_ms < -PRE_ROLL_SECONDS * 1000.0 or elapsed_ms >= 0:
             continue
         pre_index += 1
         frame_writer.save(
             f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
             draw_overlay(frame, [
-                (f"RUN {run_idx}  BEFORE POWER ON  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4),
+                (f"RUN {run_idx}  BEFORE OK  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4),
                 (f"Similarity {score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
             ]),
         )
 
-    print(f"[RUN {run_idx}] Waiting for Home screen (saving every frame until similarity "
+    print(f"[RUN {run_idx}] Waiting for {APP_NAME} to load (saving every frame until similarity "
           f"{FRAME_CAPTURE_SIMILARITY:.2f})...")
     try:
-        while time.perf_counter() - power_on_at <= timeout:
+        while time.perf_counter() - ok_pressed_at <= timeout:
             captured = frame_capture.get_frame()
             if captured is None:
                 continue
 
             captured_at, frame = captured
-            if captured_at < power_on_at:
+            if captured_at < ok_pressed_at:
                 continue
 
             frame_count += 1
-            score = home_similarity(frame, reference)
-            elapsed_ms = (captured_at - power_on_at) * 1000.0
+            score = screen_similarity(frame, reference)
+            elapsed_ms = (captured_at - ok_pressed_at) * 1000.0
             last_elapsed_ms = elapsed_ms
-            # Only count a Home match after at least one frame below the threshold (TV off / booting),
-            # so a stale buffered frame or a TV that never turned off cannot pass instantly.
+            # Only count a match after a frame below the threshold, so a stale frame cannot pass.
             if score < similarity_threshold:
                 armed = True
             newly_detected = armed and not detected and score >= similarity_threshold
@@ -443,14 +649,13 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 detected = True
                 detected_elapsed_ms = elapsed_ms
 
-            # Saved frames show this frame's own elapsed time from Power ON and its similarity.
             saved_color = (0, 255, 0) if score >= similarity_threshold else (0, 255, 255)
             saved_overlay = [
                 (f"RUN {run_idx}  #{frame_count}  TIMER {elapsed_ms / 1000.0:.3f} s", saved_color, 1.4),
                 (f"Similarity {score:.3f} / {similarity_threshold:.3f}", saved_color, 1.0),
             ]
             if detected:
-                saved_overlay.append((f"HOME DETECTED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+                saved_overlay.append((f"LOADED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
             frame_writer.save(
                 f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
                 draw_overlay(frame.copy(), saved_overlay),
@@ -463,7 +668,7 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 (f"Similarity {score:.3f} / {similarity_threshold:.3f}", status_color, 1.0),
             ]
             if detected:
-                overlay.append(("HOME DETECTED", (0, 255, 0), 1.2))
+                overlay.append((f"{APP_NAME.upper()} LOADED", (0, 255, 0), 1.2))
                 overlay.append((f"Saving frames until {FRAME_CAPTURE_SIMILARITY:.2f}...", (255, 255, 255), 0.8))
             draw_overlay(frame, overlay)
             cv2.imshow(CAPTURE_WINDOW, frame)
@@ -471,11 +676,9 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 raise KeyboardInterrupt("Measurement canceled by user.")
 
             if newly_detected:
-                cv2.imwrite(os.path.join(output_dir, "RESULT_HOME.jpg"), frame)
-                print(
-                    f"[RUN {run_idx}] Home similarity threshold reached in "
-                    f"{elapsed_ms:.2f} ms (match {score:.3f}, threshold {similarity_threshold:.3f})."
-                )
+                cv2.imwrite(os.path.join(output_dir, "RESULT_LOADED.jpg"), frame)
+                print(f"[RUN {run_idx}] {APP_NAME} loaded in {elapsed_ms:.2f} ms "
+                      f"(match {score:.3f}, threshold {similarity_threshold:.3f}).")
                 winsound.Beep(1500, 250)
                 winsound.Beep(2500, 350)
 
@@ -490,9 +693,8 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
     if detected:
         cv2.waitKey(2000)
         last_elapsed_ms = detected_elapsed_ms
-
-    if not detected:
-        print(f"[RUN {run_idx}] Home screen not detected within {timeout:g} seconds.")
+    else:
+        print(f"[RUN {run_idx}] {APP_NAME} did not load within {timeout:g} seconds.")
         winsound.Beep(400, 700)
 
     return {
@@ -504,6 +706,49 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
     }
 
 
+def invalid_result(run_idx, output_dir, reason):
+    print(f"[RUN {run_idx}] INVALID: {reason}")
+    winsound.Beep(400, 300)
+    winsound.Beep(400, 300)
+    return {'run': run_idx, 'status': 'INVALID', 'response_time_ms': None, 'frame_count': 0,
+            'directory': output_dir, 'reason': reason}
+
+
+def run_once(configuration, camera, run_idx, output_dir, route, target_point, focus_reference, landing_reference):
+    manufacturer = configuration['manufacturer']
+    threshold = configuration['landing_similarity_threshold']
+
+    if configuration['standby_seconds'] > 0:
+        print(f"\n[RUN {run_idx}] STEP 1: Power OFF, standby, Power ON.")
+        send_key('Power', manufacturer)
+        winsound.Beep(1000, 200)
+        wait_with_countdown(camera, configuration['standby_seconds'], run_idx, "Standby", "Power ON")
+        send_key('Power', manufacturer)
+        wait_with_countdown(camera, BOOT_WAIT_SECONDS, run_idx, "Boot wait", "Home")
+
+    print(f"[RUN {run_idx}] STEP 2: Home -> {', '.join(route)} to focus {APP_NAME}.")
+    focused, focus_frame = focus_on_target(configuration, camera, route, target_point, focus_reference, run_idx)
+    cv2.imwrite(os.path.join(output_dir, "FOCUS_BEFORE_OK.jpg"), focus_frame)
+    if not focused:
+        return invalid_result(run_idx, output_dir, f"{APP_NAME} could not be focused.")
+
+    frame_capture = CameraFrameCapture(camera)
+    frame_capture.start()
+    try:
+        ready, precheck_score, pre_frames = check_not_launched(frame_capture, landing_reference, threshold, output_dir)
+        if not ready:
+            return invalid_result(run_idx, output_dir,
+                                  f"{APP_NAME} was already showing (similarity {precheck_score:.3f}) before OK.")
+        frame_capture.clear_buffer()
+        print(f"[RUN {run_idx}] STEP 3: OK launches {APP_NAME}; the timer starts now.")
+        ok_pressed_at = send_key('OK', manufacturer)
+        winsound.Beep(1500, 300)
+        return measure_launch_time(frame_capture, landing_reference, run_idx, output_dir,
+                                   configuration['timeout'], threshold, ok_pressed_at, pre_frames)
+    finally:
+        frame_capture.stop()
+
+
 def main():
     configuration = get_user_configuration()
     camera = None
@@ -513,6 +758,7 @@ def main():
         if not position_camera(camera):
             print("Camera setup canceled.")
             return
+        cv2.namedWindow(CAPTURE_WINDOW, cv2.WINDOW_AUTOSIZE)
 
         calibration_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         calibration_dir = os.path.join(
@@ -520,13 +766,18 @@ def main():
             f"Omedia_TC02_Calibration_{calibration_timestamp}_{configuration['SoC']}"
         )
         os.makedirs(calibration_dir, exist_ok=True)
-        reference = review_saved_home_reference()
-        if reference is None:
-            reference = capture_home_reference(camera, calibration_dir)
+
+        route, target_point, focus_reference = calibrate_route(configuration, camera, calibration_dir)
+        landing_reference = review_saved_landing_reference()
+        if landing_reference is None:
+            press_home(configuration['manufacturer'], camera)
+            replay_route(route, configuration['manufacturer'], camera)
+            landing_reference = capture_landing_reference(camera, configuration['manufacturer'], calibration_dir)
         else:
-            cv2.imwrite(os.path.join(calibration_dir, "home_reference.jpg"), reference)
+            cv2.imwrite(os.path.join(calibration_dir, "landing_reference.jpg"), landing_reference)
 
         results = []
+        threshold = configuration['landing_similarity_threshold']
         for run_idx in range(1, configuration['num_runs'] + 1):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_dir = os.path.join(
@@ -535,62 +786,24 @@ def main():
                 f"_SWV{configuration['SWV']}_LGCV{configuration['LGCV']}"
             )
             os.makedirs(output_dir, exist_ok=True)
-            print(f"\n[RUN {run_idx}/{configuration['num_runs']}] STEP 1: Send remote Power to turn the TV OFF.")
-            send_key('Power', configuration['manufacturer'])
-            winsound.Beep(1000, 200)
-            print("STEP 2: Starting the standby wait.")
-            wait_with_countdown(camera, STANDBY_SECONDS, run_idx)
+            print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] {APP_NAME} launch\n{'=' * 60}")
 
-            frame_capture = CameraFrameCapture(camera)
-            frame_capture.start()
-            try:
-                tv_off, precheck_score, pre_frames = check_tv_off(
-                    frame_capture, reference, configuration['home_similarity_threshold'], output_dir
-                )
-                if not tv_off:
-                    print(
-                        f"[RUN {run_idx}] INVALID: the screen already matches Home (similarity "
-                        f"{precheck_score:.3f}) before Power ON, so the TV did not turn off. "
-                        "Skipping this run; the next run's Power OFF should restore the state."
-                    )
-                    winsound.Beep(400, 300)
-                    winsound.Beep(400, 300)
-                    result = {
-                        'run': run_idx,
-                        'status': 'INVALID',
-                        'response_time_ms': None,
-                        'frame_count': 0,
-                        'directory': output_dir,
-                    }
-                else:
-                    frame_capture.clear_buffer()
-                    print("STEP 3: Send remote Power to turn the TV ON; measurement starts now.")
-                    power_on_at = send_key('Power', configuration['manufacturer'])
-                    winsound.Beep(1500, 300)
-                    result = measure_home_time(
-                        frame_capture,
-                        reference,
-                        run_idx,
-                        output_dir,
-                        configuration['timeout'],
-                        configuration['home_similarity_threshold'],
-                        power_on_at,
-                        pre_frames,
-                    )
-            finally:
-                frame_capture.stop()
+            result = run_once(configuration, camera, run_idx, output_dir, route, target_point,
+                              focus_reference, landing_reference)
 
             if result['status'] != 'INVALID':
-                make_run_videos(output_dir, threshold=configuration['home_similarity_threshold'],
-                                run_label=f"RUN {run_idx}")
+                make_run_videos(output_dir, threshold=threshold, run_label=f"RUN {run_idx}")
+            # Leave the app so the next run starts from Home.
+            send_key('Home', configuration['manufacturer'])
+            time.sleep(EXIT_WAIT_SECONDS)
 
             results.append(result)
             row = {
                 'TC': 'Omedia_TC02',
                 'Run': result['run'],
                 'Timestamp': timestamp,
-                'Standby_Seconds': STANDBY_SECONDS,
-                'Home_Time_ms': (
+                'Standby_Seconds': configuration['standby_seconds'],
+                'Launch_Time_ms': (
                     round(result['response_time_ms'], 2) if result['response_time_ms'] is not None else None
                 ),
                 'Frames': result['frame_count'],
@@ -612,17 +825,18 @@ def main():
                 'SoC': configuration['SoC'],
                 'SWV': configuration['SWV'],
                 'LGCV': configuration['LGCV'],
-                'Standby_Seconds': STANDBY_SECONDS,
-                'Similarity_Threshold': configuration['home_similarity_threshold'],
-                'Home_Time_ms': row['Home_Time_ms'],
+                'Standby_Seconds': configuration['standby_seconds'],
+                'Similarity_Threshold': threshold,
+                'Route': ' '.join(route),
+                'Launch_Time_ms': row['Launch_Time_ms'],
                 'Frames': row['Frames'],
                 'Status': row['Status'],
             })
 
         passed = sum(result['status'] == 'PASS' for result in results)
-        invalid = sum(result['status'] == 'INVALID' for result in results)
-        if invalid:
-            print(f"{invalid} run(s) were INVALID because the TV was not off before Power ON.")
+        invalid = [result for result in results if result['status'] == 'INVALID']
+        for result in invalid:
+            print(f"Run {result['run']} INVALID: {result.get('reason', '')}")
         print(f"\nOmedia_TC02 complete: {passed}/{len(results)} runs passed.")
         for frequency in (1500, 2000, 2500):
             winsound.Beep(frequency, 200)
