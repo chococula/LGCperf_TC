@@ -55,6 +55,9 @@ RAW_IR_KEYSETS = {
 APP_NAME = "Samsung TV Plus"
 CAMERA_INDEX = 1
 CAPTURE_WINDOW = "Omedia_TC02 Capture"
+# Home layout used to turn a click into a D-pad route (fractions of the camera frame, PACE_01 framing)
+CARD_ROW_LEFT, CARD_ROW_TOP, CARD_ROW_BOTTOM, ICON_ROW_BOTTOM = 0.09, 0.47, 0.68, 0.78
+CARD_WIDTH, ICON_WIDTH = 0.26, 0.09
 HOME_READY_SIMILARITY = 0.6     # pre-check: Home with TV Plus focused must still match this well
 MIN_MOTION_THRESHOLD = 2.0      # mean gray-level change per frame inside the live video area
 MOTION_THRESHOLD_RATIO = 0.4    # streaming = motion of at least 40% of the measured playing motion
@@ -329,13 +332,19 @@ def screen_similarity(frame, reference):
 # ---------- calibration: route to Samsung TV Plus (same as PACE_01) ----------
 
 def route_for_click(point, frame_shape):
-    """D-pad route from Home for a click on the Samsung TV Plus card or its bottom app icon (PACE_01 layout)."""
+    """D-pad route from Home for a click on a Live TV card or an app icon (PACE_01 layout).
+
+    The first Live TV card (x 0.09-0.35, y 0.47-0.68) is Down; each card to its right adds one Right.
+    The first app icon (x 0.09-0.18, y 0.68-0.78) is Down, Down; each icon to its right adds one Right.
+    """
     x_ratio = point[0] / frame_shape[1]
     y_ratio = point[1] / frame_shape[0]
-    if 0.09 <= x_ratio <= 0.35 and 0.47 <= y_ratio <= 0.68:
-        return ['Down']
-    if 0.09 <= x_ratio <= 0.18 and 0.68 < y_ratio <= 0.78:
-        return ['Down', 'Down']
+    if x_ratio < CARD_ROW_LEFT:
+        return None
+    if CARD_ROW_TOP <= y_ratio <= CARD_ROW_BOTTOM:
+        return ['Down'] + ['Right'] * int((x_ratio - CARD_ROW_LEFT) // CARD_WIDTH)
+    if CARD_ROW_BOTTOM < y_ratio <= ICON_ROW_BOTTOM:
+        return ['Down', 'Down'] + ['Right'] * int((x_ratio - CARD_ROW_LEFT) // ICON_WIDTH)
     return None
 
 
@@ -348,7 +357,7 @@ def select_app_route(camera, saved_point=None):
         if event == cv2.EVENT_LBUTTONDOWN:
             selection['point'] = (x, y)
 
-    print(f"\n[SETUP] Click the {APP_NAME} card or its bottom app icon, then press Enter (Q = cancel).")
+    print("\n[SETUP] Click the Live TV card (or the Samsung TV Plus app icon) to open, then press Enter (Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
@@ -362,7 +371,7 @@ def select_app_route(camera, saved_point=None):
         elif route:
             lines = [(f"{APP_NAME} selected: {', '.join(route)} + OK.  ENTER = go", (0, 255, 0), 1.0)]
         else:
-            lines = [(f"Click the {APP_NAME} card or its app icon", (0, 0, 255), 1.0)]
+            lines = [("Click a Live TV card or the app icon", (0, 0, 255), 1.0)]
         if selection['point'] is not None:
             cv2.circle(preview, selection['point'], 12, (0, 255, 0) if route else (0, 0, 255), 3)
         cv2.imshow(window_name, draw_overlay(preview, lines))
@@ -431,10 +440,39 @@ def capture_home_ready(camera):
     return np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
 
 
-def capture_tvplus_screen(camera, calibration_dir, home_ready, manufacturer):
-    """Live view after OK; Enter captures the TV Plus screen once it is no longer the Home screen."""
+def open_clicked_live_tv(configuration, camera, point, frame_shape, context):
+    """Go to the Live TV the user clicked on the Home view and press OK; remember it for the runs."""
+    route = route_for_click(point, frame_shape)
+    if route is None:
+        print("[SETUP] That spot is not a Live TV card or app icon; click a card in the row under the banner.")
+        return
+    manufacturer = configuration['manufacturer']
+    print(f"[SETUP] Opening the clicked Live TV: Home -> {', '.join(route)} -> OK")
+    press_home(manufacturer, camera)
+    replay_route(route, manufacturer, camera)
+    context['home_ready'] = capture_home_ready(camera)     # Home with the new tile focused
+    configuration['route'] = route
+    configuration['target_point'] = [int(point[0]), int(point[1])]
+    save_configuration(CONFIG_FILE, configuration)
+    send_key('OK', manufacturer)
+
+
+def capture_tvplus_screen(configuration, camera, calibration_dir, context):
+    """Live view after OK; Enter captures the screen once it is no longer the Home screen.
+
+    While the camera still sees Home, a click on the view chooses which Live TV to open.
+    """
+    manufacturer = configuration['manufacturer']
     print(f"\n[SETUP] {APP_NAME} is opening. When the live TV stream is playing, press ENTER in the "
-          "camera window to capture the screen (O = send OK again, Q = cancel).")
+          "camera window to capture the screen. If Home stays on screen, click the Live TV to open "
+          "(O = send OK again, Q = cancel).")
+    clicks = []
+
+    def on_mouse(event, x, y, flags, parameter):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            clicks.append((x, y))
+
+    cv2.setMouseCallback(CAPTURE_WINDOW, on_mouse)
     # Drop key presses left over from earlier windows (e.g. a held Enter) so they cannot capture Home.
     for _ in range(50):
         if cv2.waitKey(1) == -1:
@@ -443,10 +481,18 @@ def capture_tvplus_screen(camera, calibration_dir, home_ready, manufacturer):
         frame = read_frame(camera)
         if frame is None:
             continue
-        on_home = screen_similarity(frame, home_ready) >= HOME_READY_SIMILARITY
-        message = (f"Still the Home screen - waiting for {APP_NAME} to open (O = send OK again)" if on_home
-                   else f"{APP_NAME}: press ENTER when live TV is playing")
-        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [(message, (0, 255, 255) if on_home else (0, 255, 0), 1.0)]))
+        on_home = screen_similarity(frame, context['home_ready']) >= HOME_READY_SIMILARITY
+        if on_home and clicks:
+            open_clicked_live_tv(configuration, camera, clicks.pop(), frame.shape, context)
+            clicks.clear()
+            continue
+        clicks.clear()
+        if on_home:
+            lines = [(f"Still the Home screen - waiting for {APP_NAME} to open", (0, 255, 255), 1.0),
+                     ("Click the Live TV to open,  O = send OK again", (0, 255, 255), 0.9)]
+        else:
+            lines = [(f"{APP_NAME}: press ENTER when live TV is playing", (0, 255, 0), 1.0)]
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), lines))
         key = cv2.waitKey(1) & 0xFF
         if key in (10, 13):
             if on_home:
@@ -503,7 +549,7 @@ def measure_playing_motion(camera, roi, seconds=2.0):
     return float(np.median(values)) if values else 0.0
 
 
-def setup_stream_detection(configuration, camera, route, calibration_dir, home_ready):
+def setup_stream_detection(configuration, camera, calibration_dir, context):
     """Capture the TV Plus screen, let the user mark the live video area, and measure its motion.
 
     A saved area is shown on the saved TV Plus screen and can be reused.
@@ -528,12 +574,12 @@ def setup_stream_detection(configuration, camera, route, calibration_dir, home_r
     while True:
         print(f"\n[SETUP] Launching {APP_NAME} once (not measured).")
         send_key('OK', manufacturer)
-        screen = capture_tvplus_screen(camera, calibration_dir, home_ready, manufacturer)
+        screen = capture_tvplus_screen(configuration, camera, calibration_dir, context)
         roi = select_stream_area(screen)
         if roi is None:
             print("[SETUP] The box is too small. Try again.")
             press_home(manufacturer, camera)
-            replay_route(route, manufacturer, camera)
+            replay_route(configuration['route'], manufacturer, camera)
             continue
         playing = measure_playing_motion(camera, roi)
         threshold = max(MIN_MOTION_THRESHOLD, playing * MOTION_THRESHOLD_RATIO)
@@ -543,7 +589,7 @@ def setup_stream_detection(configuration, camera, route, calibration_dir, home_r
         if input("Use this live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
             break
         press_home(manufacturer, camera)
-        replay_route(route, manufacturer, camera)
+        replay_route(configuration['route'], manufacturer, camera)
 
     configuration['stream_roi'] = roi
     configuration['motion_threshold'] = float(threshold)
@@ -762,9 +808,12 @@ def main():
 
         route = calibrate_route(configuration, camera)
         replay_route(route, configuration['manufacturer'], camera)
-        home_ready = capture_home_ready(camera)
+        context = {'home_ready': capture_home_ready(camera)}
+        roi, motion_threshold = setup_stream_detection(configuration, camera, calibration_dir, context)
+        # The user may have picked a different Live TV on the waiting screen.
+        route = configuration['route']
+        home_ready = context['home_ready']
         cv2.imwrite(os.path.join(calibration_dir, "home_ready.jpg"), home_ready)
-        roi, motion_threshold = setup_stream_detection(configuration, camera, route, calibration_dir, home_ready)
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
