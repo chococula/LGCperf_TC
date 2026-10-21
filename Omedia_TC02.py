@@ -1,14 +1,13 @@
 """Omedia_TC02 - Samsung TV Plus launch time.
 
-Calibration (once, reused afterwards):
-  1. Home is shown; click Samsung TV Plus on the camera image.
-  2. The program walks the focus there with D-pad keys, watching the focus highlight on camera,
-     and saves the key route plus an image of the focused tile.
-  3. TV Plus is launched once to capture the "fully loaded" landing reference.
+Setup (same as PACE_01):
+  1. Home is shown; click the Samsung TV Plus card (route: Down) or its bottom app icon
+     (route: Down, Down).
+  2. TV Plus is launched once to capture the "fully loaded" landing reference (reused afterwards).
 Each run:
-  Power cycle (optional) -> Home -> replay the route -> confirm TV Plus is focused ->
-  record 2 s of pre-roll -> OK starts the timer -> stop when the landing similarity reaches the
-  threshold. Frames, MP4/GIF, CSV row, and upload are the same as Omedia_TC01.
+  Power cycle (optional) -> Home -> route -> record 2 s of pre-roll -> OK starts the timer ->
+  stop when the landing similarity reaches the threshold. Frames, MP4/GIF, CSV row, and upload
+  are the same as Omedia_TC01.
 """
 import cv2
 import numpy as np
@@ -22,7 +21,6 @@ import time
 import winsound
 from datetime import datetime
 
-import focus_navigator as nav
 from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
@@ -32,7 +30,6 @@ from run_video import make_run_videos
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_config.json")
 LANDING_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_landing_reference.jpg")
-FOCUS_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC02_focus_reference.jpg")
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'Samsung',
     'SoC': 'U8000',
@@ -58,10 +55,9 @@ CAPTURE_WINDOW = "Omedia_TC02 Capture"
 FRAME_CAPTURE_SIMILARITY = 0.85
 PRE_ROLL_SECONDS = 2.0
 BOOT_WAIT_SECONDS = 20
-HOME_SETTLE_SECONDS = 5
-KEY_GAP_SECONDS = 1.0
+HOME_SETTLE_SECONDS = 3
+KEY_GAP_SECONDS = 0.5
 EXIT_WAIT_SECONDS = 3
-FOCUS_MATCH_THRESHOLD = 0.8
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC02_response.csv")
 
 
@@ -161,17 +157,6 @@ def position_camera(camera):
 def read_frame(camera):
     ret, frame = camera.read()
     return frame if ret else None
-
-
-def grab_still(camera, label=None):
-    """Settled median frame, also shown in the capture window."""
-    frame = nav.settle_and_grab(lambda: read_frame(camera))
-    preview = frame.copy()
-    if label:
-        draw_overlay(preview, [(label, (255, 255, 255), 1.0)])
-    cv2.imshow(CAPTURE_WINDOW, preview)
-    cv2.waitKey(1)
-    return frame
 
 
 class CameraFrameCapture:
@@ -337,73 +322,54 @@ def screen_similarity(frame, reference):
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
-# ---------- calibration: route to Samsung TV Plus ----------
+# ---------- calibration: route to Samsung TV Plus (same as PACE_01) ----------
 
-def click_target(camera, saved_point=None):
-    """Show the Home screen and ask where to go. Returns the point in frame pixels.
+def route_for_click(point, frame_shape):
+    """D-pad route from Home for a click on the Samsung TV Plus card or its bottom app icon (PACE_01 layout)."""
+    x_ratio = point[0] / frame_shape[1]
+    y_ratio = point[1] / frame_shape[0]
+    if 0.09 <= x_ratio <= 0.35 and 0.47 <= y_ratio <= 0.68:
+        return ['Down']
+    if 0.09 <= x_ratio <= 0.18 and 0.68 < y_ratio <= 0.78:
+        return ['Down', 'Down']
+    return None
 
-    A previously chosen spot is pre-marked; Enter keeps it, a click picks a new one.
-    """
-    window_name = f"Click {APP_NAME}"
-    still = grab_still(camera)
+
+def select_app_route(camera, saved_point=None):
+    """Show Home, let the user click Samsung TV Plus, and return (route, point)."""
+    window_name = f"Select {APP_NAME}"
     selection = {'point': tuple(saved_point) if saved_point else None}
 
     def on_mouse(event, x, y, flags, parameter):
         if event == cv2.EVENT_LBUTTONDOWN:
             selection['point'] = (x, y)
 
-    print(f"\n[SETUP] Home screen shown. Click where to go ({APP_NAME}), then press Enter "
-          "(R = refresh image, Q = cancel).")
+    print(f"\n[SETUP] Click the {APP_NAME} card or its bottom app icon, then press Enter (Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
-        preview = still.copy()
+        frame = read_frame(camera)
+        if frame is None:
+            continue
+        preview = frame.copy()
+        route = route_for_click(selection['point'], frame.shape) if selection['point'] else None
         if selection['point'] is None:
-            message = f"Click {APP_NAME}, then press ENTER"
-        elif saved_point and tuple(selection['point']) == tuple(saved_point):
-            message = "ENTER = go to the marked spot,  or click another"
+            lines = [(f"Click {APP_NAME}, then press ENTER", (0, 255, 0), 1.0)]
+        elif route:
+            lines = [(f"{APP_NAME} selected: {', '.join(route)} + OK.  ENTER = go", (0, 255, 0), 1.0)]
         else:
-            message = "ENTER = go there,  click again to change"
-        draw_overlay(preview, [(message, (0, 255, 0), 1.0)])
+            lines = [(f"Click the {APP_NAME} card or its app icon", (0, 0, 255), 1.0)]
         if selection['point'] is not None:
-            cv2.drawMarker(preview, selection['point'], (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
-            cv2.circle(preview, selection['point'], 16, (0, 255, 0), 2)
-        cv2.imshow(window_name, preview)
+            cv2.circle(preview, selection['point'], 12, (0, 255, 0) if route else (0, 0, 255), 3)
+        cv2.imshow(window_name, draw_overlay(preview, lines))
         key = cv2.waitKey(30) & 0xFF
-        if key in (10, 13) and selection['point'] is not None:
+        if key in (10, 13) and route:
             cv2.destroyWindow(window_name)
-            return selection['point']
-        if key == ord('r'):
-            still = grab_still(camera)
+            print(f"[SETUP] Route to {APP_NAME}: {', '.join(route)} + OK")
+            return route, selection['point']
         if key == ord('q'):
             cv2.destroyWindow(window_name)
-            raise KeyboardInterrupt("Target selection canceled.")
-
-
-def show_and_confirm(frame, title, lines, box=None, point=None):
-    preview = frame.copy()
-    if box is not None:
-        x, y, w, h = box
-        cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 2)
-    if point is not None:
-        cv2.drawMarker(preview, tuple(int(v) for v in point), (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
-    draw_overlay(preview, lines)
-    cv2.imshow(title, preview)
-    cv2.waitKey(1)
-
-
-def parse_route(text):
-    aliases = {'u': 'Up', 'up': 'Up', 'd': 'Down', 'dn': 'Down', 'down': 'Down',
-               'l': 'Left', 'left': 'Left', 'r': 'Right', 'rt': 'Right', 'right': 'Right'}
-    route = []
-    for part in text.replace(' ', ',').split(','):
-        part = part.strip().lower()
-        if not part:
-            continue
-        if part not in aliases:
-            raise ValueError(f"Unknown key '{part}'. Use Up, Down, Left, Right.")
-        route.append(aliases[part])
-    return route
+            raise KeyboardInterrupt(f"{APP_NAME} selection canceled.")
 
 
 def press_home(manufacturer, camera):
@@ -427,109 +393,15 @@ def replay_route(route, manufacturer, camera):
             cv2.waitKey(1)
 
 
-def auto_navigate(configuration, camera, target_point):
-    manufacturer = configuration['manufacturer']
-
-    def press(key):
-        send_key(key, manufacturer)
-
-    return nav.navigate_to_target(press, lambda: grab_still(camera, f"Finding {APP_NAME}..."), target_point)
-
-
-def calibrate_route(configuration, camera, calibration_dir):
-    """Show Home, ask the user where to go, and move there with the D-pad.
-
-    If the user keeps the previously chosen spot, the saved route is replayed and checked on camera;
-    otherwise (or if it misses) the route is found again by watching the focus move.
-    """
-    manufacturer = configuration['manufacturer']
-    saved_focus = cv2.imread(FOCUS_REFERENCE_FILE) if os.path.isfile(FOCUS_REFERENCE_FILE) else None
-    saved_route = configuration['route'] if saved_focus is not None else []
-    saved_point = tuple(configuration['target_point']) if saved_route and configuration['target_point'] else None
-
-    while True:
-        press_home(manufacturer, camera)
-        target_point = click_target(camera, saved_point)
-        if saved_point and tuple(target_point) == saved_point:
-            print(f"[SETUP] Going to the marked spot with the saved route: {', '.join(saved_route)}")
-            replay_route(saved_route, manufacturer, camera)
-            frame = grab_still(camera)
-            score = nav.region_similarity(saved_focus, frame, target_point)
-            print(f"[SETUP] Focus match {score:.2f} (needs {FOCUS_MATCH_THRESHOLD:.2f})")
-            if score >= FOCUS_MATCH_THRESHOLD:
-                return saved_route, target_point, saved_focus
-            print("[SETUP] The saved route missed; finding the spot again with the camera.")
-            press_home(manufacturer, camera)
-        route, focus_frame, focus_box = [], None, None
-        try:
-            route, focus_frame, focus_box = auto_navigate(configuration, camera, target_point)
-        except RuntimeError as error:
-            print(f"[SETUP] Automatic navigation failed: {error}")
-            focus_frame = grab_still(camera)
-
-        lines = [(f"Route: {', '.join(route) or '(none)'}", (0, 255, 255), 1.0),
-                 (f"Is {APP_NAME} focused?  Answer in the console.", (255, 255, 255), 0.9)]
-        show_and_confirm(focus_frame, "Route Check", lines, focus_box, target_point)
-        answer = input(f"Is {APP_NAME} focused now? (Y = save / n = try again / m = type the route): ").strip().lower()
-        cv2.destroyWindow("Route Check")
-        if answer == 'm':
-            while True:
-                try:
-                    route = parse_route(input("Route from Home, e.g. Down,Down,Right: "))
-                    break
-                except ValueError as error:
-                    print(error)
-            press_home(manufacturer, camera)
-            replay_route(route, manufacturer, camera)
-            focus_frame = grab_still(camera)
-            show_and_confirm(focus_frame, "Route Check", [(f"Route: {', '.join(route)}", (0, 255, 255), 1.0)],
-                             point=target_point)
-            answer = input(f"Is {APP_NAME} focused now? (Y/n): ").strip().lower()
-            cv2.destroyWindow("Route Check")
-        if answer in ('', 'y', 'yes') and focus_frame is not None:
-            break
-        print("[SETUP] Let's try again from the Home screen.")
-
-    # The calibration route was found from wherever the focus started; check that replaying it
-    # from a fresh Home press lands on the target too.
-    press_home(manufacturer, camera)
-    replay_route(route, manufacturer, camera)
-    replay_frame = grab_still(camera)
-    score = nav.region_similarity(focus_frame, replay_frame, target_point)
-    print(f"[SETUP] Replaying the route from Home: focus match {score:.2f} (needs {FOCUS_MATCH_THRESHOLD:.2f})")
-    if score < FOCUS_MATCH_THRESHOLD:
-        print("[SETUP] The route does not land on the same tile after Home; each run will re-find "
-              f"{APP_NAME} with the camera if the replayed route misses.")
-
-    for path in (FOCUS_REFERENCE_FILE, os.path.join(calibration_dir, "focus_reference.jpg")):
-        cv2.imwrite(path, focus_frame)
+def calibrate_route(configuration, camera):
+    """Home first, then the user clicks Samsung TV Plus; the click decides the D-pad route."""
+    press_home(configuration['manufacturer'], camera)
+    saved_point = configuration['target_point'] or None
+    route, point = select_app_route(camera, saved_point)
     configuration['route'] = route
-    configuration['target_point'] = [int(target_point[0]), int(target_point[1])]
+    configuration['target_point'] = [int(point[0]), int(point[1])]
     save_configuration(CONFIG_FILE, configuration)
-    print(f"[SETUP] Saved route to {APP_NAME}: {', '.join(route)}")
-    return route, target_point, focus_frame
-
-
-def focus_on_target(configuration, camera, route, target_point, focus_reference, run_idx):
-    """Home -> route; confirm the focus with the camera, re-finding the target once if needed."""
-    manufacturer = configuration['manufacturer']
-    press_home(manufacturer, camera)
-    replay_route(route, manufacturer, camera)
-    frame = grab_still(camera, f"RUN {run_idx}: checking focus on {APP_NAME}")
-    score = nav.region_similarity(focus_reference, frame, target_point)
-    print(f"[RUN {run_idx}] Focus match on {APP_NAME}: {score:.2f}")
-    if score >= FOCUS_MATCH_THRESHOLD:
-        return True, frame
-    print(f"[RUN {run_idx}] Route missed {APP_NAME}; finding it with the camera...")
-    try:
-        press_home(manufacturer, camera)
-        _, frame, _ = auto_navigate(configuration, camera, target_point)
-    except RuntimeError as error:
-        print(f"[RUN {run_idx}] {error}")
-        return False, grab_still(camera)
-    score = nav.region_similarity(focus_reference, frame, target_point)
-    print(f"[RUN {run_idx}] Focus match after re-finding: {score:.2f}")
-    return score >= FOCUS_MATCH_THRESHOLD, frame
+    return route
 
 
 # ---------- calibration: landing reference ----------
@@ -736,7 +608,7 @@ def invalid_result(run_idx, output_dir, reason):
             'directory': output_dir, 'reason': reason}
 
 
-def run_once(configuration, camera, run_idx, output_dir, route, target_point, focus_reference, landing_reference):
+def run_once(configuration, camera, run_idx, output_dir, route, landing_reference):
     manufacturer = configuration['manufacturer']
     threshold = configuration['landing_similarity_threshold']
 
@@ -749,10 +621,8 @@ def run_once(configuration, camera, run_idx, output_dir, route, target_point, fo
         wait_with_countdown(camera, BOOT_WAIT_SECONDS, run_idx, "Boot wait", "Home")
 
     print(f"[RUN {run_idx}] STEP 2: Home -> {', '.join(route)} to focus {APP_NAME}.")
-    focused, focus_frame = focus_on_target(configuration, camera, route, target_point, focus_reference, run_idx)
-    cv2.imwrite(os.path.join(output_dir, "FOCUS_BEFORE_OK.jpg"), focus_frame)
-    if not focused:
-        return invalid_result(run_idx, output_dir, f"{APP_NAME} could not be focused.")
+    press_home(manufacturer, camera)
+    replay_route(route, manufacturer, camera)
 
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
@@ -789,7 +659,7 @@ def main():
         )
         os.makedirs(calibration_dir, exist_ok=True)
 
-        route, target_point, focus_reference = calibrate_route(configuration, camera, calibration_dir)
+        route = calibrate_route(configuration, camera)
         landing_reference = review_saved_landing_reference()
         if landing_reference is None:
             press_home(configuration['manufacturer'], camera)
@@ -810,8 +680,7 @@ def main():
             os.makedirs(output_dir, exist_ok=True)
             print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] {APP_NAME} launch\n{'=' * 60}")
 
-            result = run_once(configuration, camera, run_idx, output_dir, route, target_point,
-                              focus_reference, landing_reference)
+            result = run_once(configuration, camera, run_idx, output_dir, route, landing_reference)
 
             if result['status'] != 'INVALID':
                 make_run_videos(output_dir, threshold=threshold, run_label=f"RUN {run_idx}")
