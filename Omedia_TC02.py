@@ -1,15 +1,16 @@
-"""Omedia_TC02 - Samsung TV Plus live stream start time.
+"""Omedia_TC02 - Samsung TV Plus Live TV channel zapping (Ch Up) time.
 
-Setup:
-  1. Home is shown; click the Samsung TV Plus card (route: Down) or its bottom app icon
-     (route: Down, Down), as in PACE_01.
-  2. TV Plus is launched once; press Enter in the camera window when live TV is playing to capture
-     the screen, then drag a box around the live video area on that captured screen.
-     Its playing motion sets the "streaming" threshold (area and threshold are reused afterwards).
+Setup (two user inputs):
+  1. Home is shown; click Samsung TV Plus (a Live TV card = Down [+ Right], app icon = Down, Down,
+     as in PACE_01). The program moves there and presses OK. If Home stays on screen, click the
+     tile again on that view.
+  2. The opened TV Plus screen is captured; click the Live TV channel to enter. The camera walks the
+     focus there (or move it with the keyboard arrow keys), then OK enters the channel.
+  The middle of the playing picture is used to detect playback; its motion sets the threshold.
 Each run:
-  Power cycle (optional) -> Home -> route -> check Home with TV Plus focused (2 s pre-roll) ->
-  OK starts the timer -> stop at the first frame of sustained motion in the live video area.
-  Frames, MP4/GIF, CSV row (Stream_Start_ms), and upload are the same as Omedia_TC01.
+  2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
+  3 consecutive moving frames after the picture went black/frozen. Frames, MP4/GIF, CSV row
+  (Zap_Time_ms), and upload are the same as Omedia_TC01.
 """
 import cv2
 import numpy as np
@@ -23,6 +24,7 @@ import time
 import winsound
 from datetime import datetime
 
+import focus_navigator as nav
 from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
@@ -38,10 +40,12 @@ DEFAULT_CONFIGURATION = {
     'SWV': '1300',
     'LGCV': '8.2.008',
     'num_runs': 5,
-    'timeout': 30.0,
-    'standby_seconds': 30,
+    'timeout': 15.0,
+    'zap_interval_seconds': 8,
     'route': [],
     'target_point': [],
+    'channel_route': [],
+    'channel_point': [],
     'stream_roi': [],
     'motion_threshold': 0.0,
 }
@@ -64,11 +68,11 @@ MOTION_THRESHOLD_RATIO = 0.4    # streaming = motion of at least 40% of the meas
 MIN_STREAM_BRIGHTNESS = 20      # a black screen is not streaming
 STREAM_CONFIRM_FRAMES = 3       # consecutive moving frames needed; the first one is the start time
 STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
+MIN_STILL_FRAMES = 2            # after Ch Up the picture must stop (black/frozen) this many frames first
+ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
 PRE_ROLL_SECONDS = 2.0
-BOOT_WAIT_SECONDS = 20
 HOME_SETTLE_SECONDS = 3
 KEY_GAP_SECONDS = 0.5
-EXIT_WAIT_SECONDS = 3
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC02_response.csv")
 
 
@@ -88,7 +92,7 @@ def ask_number(prompt, default, cast, valid):
 def get_user_configuration():
     defaults = load_saved_configuration(CONFIG_FILE, DEFAULT_CONFIGURATION)
     print("\n" + "=" * 60)
-    print(f"  Omedia_TC02 - {APP_NAME} Live Stream Start Time")
+    print(f"  Omedia_TC02 - {APP_NAME} Live TV Channel Zapping (Ch Up)")
     print("=" * 60)
 
     while True:
@@ -102,9 +106,9 @@ def get_user_configuration():
     SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
     num_runs = ask_number("Enter number of runs", defaults['num_runs'], int, lambda v: v > 0)
-    timeout = ask_number("Enter stream start timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
-    standby_seconds = ask_number("Enter TV standby seconds before each run (0 = no power cycle)",
-                                 defaults['standby_seconds'], int, lambda v: v >= 0)
+    timeout = ask_number("Enter zap timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
+    zap_interval_seconds = ask_number("Enter seconds to watch each channel before the next Ch Up",
+                                      defaults['zap_interval_seconds'], int, lambda v: v >= 0)
 
     configuration = dict(defaults)
     configuration.update({
@@ -114,10 +118,10 @@ def get_user_configuration():
         'LGCV': LGCV,
         'num_runs': num_runs,
         'timeout': timeout,
-        'standby_seconds': standby_seconds,
+        'zap_interval_seconds': zap_interval_seconds,
     })
     print("\nConfiguration:")
-    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'standby_seconds'):
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds'):
         print(f"  {key}: {configuration[key]}")
     if configuration['route']:
         print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
@@ -243,33 +247,6 @@ def draw_overlay(frame, lines):
     for text, color, scale, line_y in layout:
         cv2.putText(frame, text, (pad, line_y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
     return frame
-
-
-def wait_with_countdown(camera, seconds, run_idx, title, until):
-    print(f"\n{title}: {seconds} seconds")
-    end_at = time.perf_counter() + seconds
-    last_printed = None
-    while True:
-        remaining = end_at - time.perf_counter()
-        if remaining <= 0:
-            break
-        if last_printed != int(remaining) + 1:
-            last_printed = int(remaining) + 1
-            print(f"  {last_printed} seconds remaining...", end="\r")
-            if last_printed <= 3:
-                winsound.Beep(800, 100)
-
-        ret, frame = camera.read()
-        if ret:
-            draw_overlay(frame, [
-                (f"RUN {run_idx} {title.upper()}", (0, 255, 255), 1.2),
-                (f"{int(remaining) // 60}:{remaining % 60:04.1f} to {until}", (0, 255, 255), 1.2),
-            ])
-            cv2.imshow(CAPTURE_WINDOW, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            raise KeyboardInterrupt("Measurement canceled by user.")
-    print(" " * 50, end="\r")
-    print(f"{title} complete.")
 
 
 def send_key(key_name, manufacturer):
@@ -417,7 +394,7 @@ def calibrate_route(configuration, camera):
     return route
 
 
-# ---------- calibration: where the live TV stream plays ----------
+# ---------- step 2: open TV Plus and pick the Live TV channel ----------
 
 def roi_gray(frame, roi):
     x, y, w, h = roi
@@ -429,8 +406,14 @@ def roi_motion(previous_gray, current_gray):
     return float(np.mean(cv2.absdiff(previous_gray, current_gray)))
 
 
+def auto_stream_roi(frame_shape):
+    """Middle of the screen: the full-screen live video, clear of the channel banner at the top/bottom."""
+    h, w = frame_shape[:2]
+    return [int(w * 0.20), int(h * 0.22), int(w * 0.60), int(h * 0.50)]
+
+
 def capture_home_ready(camera):
-    """Median gray frame of Home with TV Plus focused, used to check each run starts from there."""
+    """Median gray frame of Home with the chosen tile focused (tells Home apart from TV Plus)."""
     samples = []
     end = time.perf_counter() + 1.0
     while time.perf_counter() < end or not samples:
@@ -440,17 +423,28 @@ def capture_home_ready(camera):
     return np.median(np.stack(samples, axis=0), axis=0).astype(np.uint8)
 
 
+def grab_still(camera, label=None):
+    """Settled median frame, also shown in the capture window."""
+    frame = nav.settle_and_grab(lambda: read_frame(camera))
+    preview = frame.copy()
+    if label:
+        draw_overlay(preview, [(label, (255, 255, 255), 1.0)])
+    cv2.imshow(CAPTURE_WINDOW, preview)
+    cv2.waitKey(1)
+    return frame
+
+
 def open_clicked_live_tv(configuration, camera, point, frame_shape, context):
-    """Go to the Live TV the user clicked on the Home view and press OK; remember it for the runs."""
+    """Go to the tile the user clicked on the Home view and press OK; remember it for later."""
     route = route_for_click(point, frame_shape)
     if route is None:
         print("[SETUP] That spot is not a Live TV card or app icon; click a card in the row under the banner.")
         return
     manufacturer = configuration['manufacturer']
-    print(f"[SETUP] Opening the clicked Live TV: Home -> {', '.join(route)} -> OK")
+    print(f"[SETUP] Opening the clicked tile: Home -> {', '.join(route)} -> OK")
     press_home(manufacturer, camera)
     replay_route(route, manufacturer, camera)
-    context['home_ready'] = capture_home_ready(camera)     # Home with the new tile focused
+    context['home_ready'] = capture_home_ready(camera)
     configuration['route'] = route
     configuration['target_point'] = [int(point[0]), int(point[1])]
     save_configuration(CONFIG_FILE, configuration)
@@ -458,14 +452,13 @@ def open_clicked_live_tv(configuration, camera, point, frame_shape, context):
 
 
 def capture_tvplus_screen(configuration, camera, calibration_dir, context):
-    """Live view after OK; Enter captures the screen once it is no longer the Home screen.
+    """Live view after OK; Enter captures the TV Plus screen once it is no longer the Home screen.
 
-    While the camera still sees Home, a click on the view chooses which Live TV to open.
+    While the camera still sees Home, a click on the view chooses which tile to open.
     """
     manufacturer = configuration['manufacturer']
-    print(f"\n[SETUP] {APP_NAME} is opening. When the live TV stream is playing, press ENTER in the "
-          "camera window to capture the screen. If Home stays on screen, click the Live TV to open "
-          "(O = send OK again, Q = cancel).")
+    print(f"\n[SETUP] {APP_NAME} is opening. When it has loaded, press ENTER in the camera window to "
+          "capture the screen. If Home stays on screen, click the tile to open (O = send OK again, Q = cancel).")
     clicks = []
 
     def on_mouse(event, x, y, flags, parameter):
@@ -489,17 +482,16 @@ def capture_tvplus_screen(configuration, camera, calibration_dir, context):
         clicks.clear()
         if on_home:
             lines = [(f"Still the Home screen - waiting for {APP_NAME} to open", (0, 255, 255), 1.0),
-                     ("Click the Live TV to open,  O = send OK again", (0, 255, 255), 0.9)]
+                     ("Click the tile to open,  O = send OK again", (0, 255, 255), 0.9)]
         else:
-            lines = [(f"{APP_NAME}: press ENTER when live TV is playing", (0, 255, 0), 1.0)]
+            lines = [(f"{APP_NAME}: press ENTER when it has loaded", (0, 255, 0), 1.0)]
         cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), lines))
         key = cv2.waitKey(1) & 0xFF
         if key in (10, 13):
             if on_home:
                 print(f"[SETUP] The camera still sees the Home screen; wait until {APP_NAME} is showing.")
                 continue
-            # Capture fresh frames taken after the key press, not the one already on screen.
-            for _ in range(3):
+            for _ in range(3):              # fresh frames taken after the key press
                 fresh = read_frame(camera)
                 if fresh is not None:
                     frame = fresh
@@ -508,24 +500,118 @@ def capture_tvplus_screen(configuration, camera, calibration_dir, context):
             send_key('OK', manufacturer)
         if key == ord('q'):
             raise KeyboardInterrupt("Setup canceled.")
+    cv2.setMouseCallback(CAPTURE_WINDOW, lambda *a: None)
     for path in (TVPLUS_SCREEN_FILE, os.path.join(calibration_dir, "tvplus_screen.jpg")):
         cv2.imwrite(path, frame)
     print(f"[SETUP] Captured the {APP_NAME} screen: {TVPLUS_SCREEN_FILE}")
     return frame
 
 
-def select_stream_area(screen):
-    """User drags a box around the live video on the captured TV Plus screen."""
-    window_name = "Select live video area"
-    print("\n[SETUP] On the captured screen, drag a box around the area where the live TV video plays, "
-          "then press Enter (C = cancel and redo).")
-    preview = draw_overlay(screen.copy(), [("Drag around the LIVE VIDEO area, then ENTER", (0, 255, 0), 1.0)])
-    roi = cv2.selectROI(window_name, preview, showCrosshair=True, fromCenter=False)
-    cv2.destroyWindow(window_name)
-    x, y, w, h = (int(v) for v in roi)
-    if w < 20 or h < 20:
-        return None
-    return [x, y, w, h]
+def click_channel(screen):
+    """On the captured TV Plus screen, the user clicks the Live TV channel to enter."""
+    window_name = "Select Live TV channel"
+    selection = {'point': None}
+
+    def on_mouse(event, x, y, flags, parameter):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            selection['point'] = (x, y)
+
+    print("\n[SETUP] Click the Live TV channel to enter on the captured screen, then press Enter (Q = cancel).")
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    cv2.setMouseCallback(window_name, on_mouse)
+    while True:
+        preview = screen.copy()
+        if selection['point'] is None:
+            lines = [("Click the Live TV channel to enter, then ENTER", (0, 255, 0), 1.0)]
+        else:
+            cv2.drawMarker(preview, selection['point'], (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
+            cv2.circle(preview, selection['point'], 16, (0, 255, 0), 2)
+            lines = [("ENTER = go to this channel,  click again to change", (0, 255, 0), 1.0)]
+        cv2.imshow(window_name, draw_overlay(preview, lines))
+        key = cv2.waitKey(30) & 0xFF
+        if key in (10, 13) and selection['point'] is not None:
+            cv2.destroyWindow(window_name)
+            return selection['point']
+        if key == ord('q'):
+            cv2.destroyWindow(window_name)
+            raise KeyboardInterrupt("Channel selection canceled.")
+
+
+def keyboard_drive(configuration, camera, pressed):
+    """Arrow keys in the camera window move the TV focus (sent as IR); Enter when on the channel."""
+    print("[SETUP] Use the arrow keys in the camera window to move to the channel, then press Enter "
+          "(Backspace = undo last move).")
+    manufacturer = configuration['manufacturer']
+    while True:
+        frame = read_frame(camera)
+        if frame is not None:
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [
+                ("Arrow keys = move,  ENTER = this channel,  Backspace = undo", (0, 255, 0), 1.0),
+                (f"Keys: {' '.join(pressed[-12:])}", (255, 255, 255), 0.8),
+            ]))
+        code = cv2.waitKeyEx(1)
+        if code in ARROW_KEYS:
+            key = ARROW_KEYS[code]
+            send_key(key, manufacturer)
+            pressed.append(key)
+        elif code in (8, 0x2E0000) and pressed:          # Backspace / Delete: undo the last move
+            undo = nav.OPPOSITE.get(pressed[-1])
+            if undo:
+                send_key(undo, manufacturer)
+                pressed.append(undo)
+        elif code in (10, 13):
+            return pressed
+
+
+def choose_channel(configuration, camera, calibration_dir, screen):
+    """Click the channel; the camera walks the focus there. Returns every key pressed (replayable)."""
+    manufacturer = configuration['manufacturer']
+    pressed = []
+
+    def press(key):
+        send_key(key, manufacturer)
+        pressed.append(key)
+
+    point = click_channel(screen)
+    debug_dir = os.path.join(calibration_dir, "nav_steps")
+    focus_box = None
+    try:
+        _, frame, focus_box = nav.navigate_to_target(press, lambda: grab_still(camera, "Moving to the channel..."),
+                                                     point, debug_dir=debug_dir)
+    except RuntimeError as error:
+        print(f"[SETUP] Automatic move failed: {error}")
+        frame = grab_still(camera)
+
+    preview = frame.copy()
+    if focus_box is not None:
+        x, y, w, h = focus_box
+        cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 3)
+    cv2.drawMarker(preview, tuple(int(v) for v in point), (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
+    cv2.imshow("Channel check", draw_overlay(preview, [("Is the channel focused?  Answer in the console", (0, 255, 255), 1.0)]))
+    cv2.waitKey(1)
+    answer = input("Is the Live TV channel focused? (Y = enter it / k = move with arrow keys): ").strip().lower()
+    cv2.destroyWindow("Channel check")
+    if answer == 'k':
+        keyboard_drive(configuration, camera, pressed)
+    print(f"[SETUP] Channel route inside {APP_NAME}: {', '.join(pressed) or '(no move)'} + OK")
+    return pressed, point
+
+
+def wait_until_playing(camera, message):
+    print(f"[SETUP] {message} Press ENTER in the camera window when it is playing.")
+    for _ in range(50):
+        if cv2.waitKey(1) == -1:
+            break
+    while True:
+        frame = read_frame(camera)
+        if frame is None:
+            continue
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [(f"{message}  ENTER when playing", (0, 255, 0), 1.0)]))
+        key = cv2.waitKey(1) & 0xFF
+        if key in (10, 13):
+            return frame
+        if key == ord('q'):
+            raise KeyboardInterrupt("Setup canceled.")
 
 
 def measure_playing_motion(camera, roi, seconds=2.0):
@@ -549,102 +635,93 @@ def measure_playing_motion(camera, roi, seconds=2.0):
     return float(np.median(values)) if values else 0.0
 
 
-def setup_stream_detection(configuration, camera, calibration_dir, context):
-    """Capture the TV Plus screen, let the user mark the live video area, and measure its motion.
-
-    A saved area is shown on the saved TV Plus screen and can be reused.
-    """
+def enter_live_channel(configuration, camera, calibration_dir, context):
+    """TV Plus is opening: capture it, choose (or reuse) the channel, enter it, and calibrate motion."""
     manufacturer = configuration['manufacturer']
-    saved_screen = cv2.imread(TVPLUS_SCREEN_FILE) if os.path.isfile(TVPLUS_SCREEN_FILE) else None
-    if configuration['stream_roi'] and configuration['motion_threshold'] > 0:
-        x, y, w, h = configuration['stream_roi']
-        print(f"\n[SETUP] Saved live video area: x={x} y={y} w={w} h={h}, "
-              f"motion threshold {configuration['motion_threshold']:.1f}")
-        if saved_screen is not None:
-            preview = saved_screen.copy()
-            cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 3)
-            cv2.imshow("Saved live video area", draw_overlay(preview, [("Saved live video area", (0, 255, 255), 1.0)]))
-            cv2.waitKey(1)
-        reuse = input("Reuse the saved live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes')
-        if saved_screen is not None:
-            cv2.destroyWindow("Saved live video area")
-        if reuse:
-            return configuration['stream_roi'], configuration['motion_threshold']
+    screen = capture_tvplus_screen(configuration, camera, calibration_dir, context)
+    reuse = False
+    if configuration['channel_point']:
+        preview = screen.copy()
+        cv2.drawMarker(preview, tuple(configuration['channel_point']), (0, 255, 255), cv2.MARKER_CROSS, 30, 3)
+        cv2.imshow("Saved channel", draw_overlay(preview, [("Saved channel", (0, 255, 255), 1.0)]))
+        cv2.waitKey(1)
+        print(f"[SETUP] Saved channel route: {', '.join(configuration['channel_route']) or '(no move)'} + OK")
+        reuse = input("Use the saved channel? (Y/n): ").strip().lower() in ('', 'y', 'yes')
+        cv2.destroyWindow("Saved channel")
+    if reuse:
+        replay_route(configuration['channel_route'], manufacturer, camera)
+        channel_route = configuration['channel_route']
+    else:
+        channel_route, point = choose_channel(configuration, camera, calibration_dir, screen)
+        configuration['channel_route'] = channel_route
+        configuration['channel_point'] = [int(point[0]), int(point[1])]
+    send_key('OK', manufacturer)
 
-    while True:
-        print(f"\n[SETUP] Launching {APP_NAME} once (not measured).")
-        send_key('OK', manufacturer)
-        screen = capture_tvplus_screen(configuration, camera, calibration_dir, context)
-        roi = select_stream_area(screen)
-        if roi is None:
-            print("[SETUP] The box is too small. Try again.")
-            press_home(manufacturer, camera)
-            replay_route(configuration['route'], manufacturer, camera)
-            continue
-        playing = measure_playing_motion(camera, roi)
-        threshold = max(MIN_MOTION_THRESHOLD, playing * MOTION_THRESHOLD_RATIO)
-        print(f"[SETUP] Live video motion {playing:.1f}; streaming counts from motion >= {threshold:.1f}")
-        if playing < MIN_MOTION_THRESHOLD:
-            print("[SETUP] The area barely moves. Pick the area where the video itself plays.")
-        if input("Use this live video area? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
-            break
-        press_home(manufacturer, camera)
-        replay_route(configuration['route'], manufacturer, camera)
-
+    frame = wait_until_playing(camera, "Entering the Live TV channel.")
+    roi = auto_stream_roi(frame.shape)
+    playing = measure_playing_motion(camera, roi)
+    threshold = max(MIN_MOTION_THRESHOLD, playing * MOTION_THRESHOLD_RATIO)
+    print(f"[SETUP] Live video motion {playing:.1f}; playing counts from motion >= {threshold:.1f}")
+    if playing < MIN_MOTION_THRESHOLD:
+        print("[SETUP] The picture barely moves; pick a channel with moving video for reliable timing.")
     configuration['stream_roi'] = roi
     configuration['motion_threshold'] = float(threshold)
     save_configuration(CONFIG_FILE, configuration)
-    press_home(manufacturer, camera)
+    cv2.imwrite(os.path.join(calibration_dir, "live_channel.jpg"), frame)
     return roi, threshold
 
 
-# ---------- measurement ----------
+# ---------- measurement: Ch Up zapping ----------
 
-def check_home_ready(frame_capture, home_ready, output_dir, seconds=PRE_ROLL_SECONDS):
-    """Before OK, confirm Home with TV Plus focused is showing; the frames double as the video pre-roll."""
+def check_playing(frame_capture, roi, motion_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
+    """Before Ch Up, confirm the channel is playing; the frames double as the video pre-roll."""
     frame_capture.clear_buffer()
-    scores = []
+    motions = []
+    previous = None
     last_frame = None
     pre_frames = []
     end_at = time.perf_counter() + seconds
-    while time.perf_counter() < end_at or not scores:
+    while time.perf_counter() < end_at or not pre_frames:
         captured = frame_capture.get_frame(timeout=1.0)
         if captured is None:
             if time.perf_counter() > end_at + 2.0:
-                raise RuntimeError("No camera frames during the pre-launch check.")
+                raise RuntimeError("No camera frames before Ch Up.")
             continue
         captured_at, frame = captured
-        score = screen_similarity(frame, home_ready)
-        scores.append(score)
+        current = roi_gray(frame, roi)
+        if previous is not None:
+            motions.append(roi_motion(previous, current))
+        previous = current
         last_frame = frame
-        pre_frames.append((captured_at, frame.copy(), score))
+        pre_frames.append((captured_at, frame.copy(), 0.0))
 
-    score = float(np.median(scores))
-    ready = score >= HOME_READY_SIMILARITY
-    last_frame = last_frame.copy()
-    draw_overlay(last_frame, [
-        (f"PRE-CHECK  Home match {score:.3f} / {HOME_READY_SIMILARITY:.3f}", (0, 255, 255), 1.0),
-        ("READY - OK" if ready else f"NOT ON HOME WITH {APP_NAME.upper()} - RUN INVALID",
-         (0, 255, 0) if ready else (0, 0, 255), 1.2),
+    motion = float(np.median(motions)) if motions else 0.0
+    playing = motion >= motion_threshold
+    preview = last_frame.copy()
+    x, y, w, h = roi
+    cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 2)
+    draw_overlay(preview, [
+        (f"PRE-CHECK  motion {motion:.1f} / {motion_threshold:.1f}", (0, 255, 255), 1.0),
+        ("PLAYING - CH UP" if playing else "NOT PLAYING - RUN INVALID", (0, 255, 0) if playing else (0, 0, 255), 1.2),
     ])
-    cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_OK.jpg"), last_frame)
-    cv2.imshow(CAPTURE_WINDOW, last_frame)
+    cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_CHUP.jpg"), preview)
+    cv2.imshow(CAPTURE_WINDOW, preview)
     cv2.waitKey(1)
-    return ready, score, pre_frames
+    return playing, motion, pre_frames, previous
 
 
-def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_dir, timeout,
-                         ok_pressed_at, pre_frames=()):
-    """Time from OK until the live video area shows sustained playback motion."""
+def measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, timeout,
+                     key_pressed_at, pre_frames=(), last_roi=None):
+    """Time from Ch Up until the new channel plays: after a blank/frozen picture, sustained motion again."""
     x, y, w, h = roi
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
-    armed = False
+    still_frames = 0            # consecutive frames with no playback (black or frozen)
     streak = 0
     candidate_ms = None
     detected_elapsed_ms = None
-    previous_roi = None
+    previous_roi = last_roi
     stop_at_ms = None
     result_saved = False
     frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
@@ -653,31 +730,31 @@ def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_d
         cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 255), 2)
         return draw_overlay(image, lines)
 
-    # Pre-roll: the last PRE_ROLL_SECONDS before OK, saved with negative elapsed time for the video.
+    # Pre-roll: the last PRE_ROLL_SECONDS before Ch Up, saved with negative elapsed time for the video.
     pre_index = 0
     for captured_at, frame, _ in pre_frames:
-        elapsed_ms = (captured_at - ok_pressed_at) * 1000.0
+        elapsed_ms = (captured_at - key_pressed_at) * 1000.0
         if elapsed_ms < -PRE_ROLL_SECONDS * 1000.0 or elapsed_ms >= 0:
             continue
         pre_index += 1
         frame_writer.save(
             f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim0.000.jpg",
-            annotate(frame, [(f"RUN {run_idx}  BEFORE OK  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
+            annotate(frame, [(f"RUN {run_idx}  BEFORE CH UP  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
         )
 
-    print(f"[RUN {run_idx}] Waiting for the live stream to start (motion >= {motion_threshold:.1f} "
-          f"for {STREAM_CONFIRM_FRAMES} frames)...")
+    print(f"[RUN {run_idx}] Waiting for the new channel to play (motion >= {motion_threshold:.1f} for "
+          f"{STREAM_CONFIRM_FRAMES} frames after the picture stops)...")
     try:
-        while time.perf_counter() - ok_pressed_at <= timeout:
+        while time.perf_counter() - key_pressed_at <= timeout:
             captured = frame_capture.get_frame()
             if captured is None:
                 continue
             captured_at, frame = captured
-            if captured_at < ok_pressed_at:
+            if captured_at < key_pressed_at:
                 continue
 
             frame_count += 1
-            elapsed_ms = (captured_at - ok_pressed_at) * 1000.0
+            elapsed_ms = (captured_at - key_pressed_at) * 1000.0
             last_elapsed_ms = elapsed_ms
             current_roi = roi_gray(frame, roi)
             motion = roi_motion(previous_roi, current_roi) if previous_roi is not None else 0.0
@@ -686,9 +763,10 @@ def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_d
 
             playing = motion >= motion_threshold and brightness >= MIN_STREAM_BRIGHTNESS
             if not playing:
-                armed = True
+                still_frames += 1
                 streak = 0
-            elif armed and not detected:
+            elif still_frames >= MIN_STILL_FRAMES and not detected:
+                # The old channel stopped (black or frozen) and the new one is moving.
                 streak += 1
                 if streak == 1:
                     candidate_ms = elapsed_ms
@@ -696,7 +774,7 @@ def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_d
                     detected = True
                     detected_elapsed_ms = candidate_ms
                     stop_at_ms = elapsed_ms + STREAM_EXTRA_SECONDS * 1000.0
-                    print(f"[RUN {run_idx}] Live stream started at {candidate_ms:.2f} ms "
+                    print(f"[RUN {run_idx}] New channel playing at {candidate_ms:.2f} ms "
                           f"(motion {motion:.1f} >= {motion_threshold:.1f}).")
                     winsound.Beep(1500, 250)
                     winsound.Beep(2500, 350)
@@ -707,7 +785,7 @@ def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_d
                 (f"Motion {motion:.1f} / {motion_threshold:.1f}", color, 1.0),
             ]
             if detected:
-                saved_lines.append((f"LIVE STREAM STARTED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+                saved_lines.append((f"NEW CHANNEL PLAYING at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
             frame_writer.save(
                 f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{min(motion / motion_threshold, 9.999):.3f}.jpg",
                 annotate(frame.copy(), saved_lines),
@@ -719,12 +797,12 @@ def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_d
                 (f"Motion {motion:.1f} / {motion_threshold:.1f}", color, 1.0),
             ]
             if detected:
-                live_lines.append(("LIVE STREAM STARTED", (0, 255, 0), 1.2))
+                live_lines.append(("NEW CHANNEL PLAYING", (0, 255, 0), 1.2))
             cv2.imshow(CAPTURE_WINDOW, annotate(frame, live_lines))
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 raise KeyboardInterrupt("Measurement canceled by user.")
             if detected and not result_saved:
-                cv2.imwrite(os.path.join(output_dir, "RESULT_STREAM_STARTED.jpg"), frame)
+                cv2.imwrite(os.path.join(output_dir, "RESULT_NEW_CHANNEL.jpg"), frame)
                 result_saved = True
             if stop_at_ms is not None and elapsed_ms >= stop_at_ms:
                 break
@@ -733,10 +811,9 @@ def measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_d
         print(f"[RUN {run_idx}] Saved {frame_writer.saved} frames to {frame_writer.frames_dir}")
 
     if detected:
-        cv2.waitKey(1500)
         last_elapsed_ms = detected_elapsed_ms
     else:
-        print(f"[RUN {run_idx}] The live stream did not start within {timeout:g} seconds.")
+        print(f"[RUN {run_idx}] The new channel did not start playing within {timeout:g} seconds.")
         winsound.Beep(400, 700)
 
     return {
@@ -756,36 +833,34 @@ def invalid_result(run_idx, output_dir, reason):
             'directory': output_dir, 'reason': reason}
 
 
-def run_once(configuration, camera, run_idx, output_dir, route, home_ready, roi, motion_threshold):
-    manufacturer = configuration['manufacturer']
-
-    if configuration['standby_seconds'] > 0:
-        print(f"\n[RUN {run_idx}] STEP 1: Power OFF, standby, Power ON.")
-        send_key('Power', manufacturer)
-        winsound.Beep(1000, 200)
-        wait_with_countdown(camera, configuration['standby_seconds'], run_idx, "Standby", "Power ON")
-        send_key('Power', manufacturer)
-        wait_with_countdown(camera, BOOT_WAIT_SECONDS, run_idx, "Boot wait", "Home")
-
-    print(f"[RUN {run_idx}] STEP 2: Home -> {', '.join(route)} to focus {APP_NAME}.")
-    press_home(manufacturer, camera)
-    replay_route(route, manufacturer, camera)
-
+def zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold):
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
-        ready, score, pre_frames = check_home_ready(frame_capture, home_ready, output_dir)
-        if not ready:
+        playing, motion, pre_frames, last_roi = check_playing(frame_capture, roi, motion_threshold, output_dir)
+        if not playing:
             return invalid_result(run_idx, output_dir,
-                                  f"Home with {APP_NAME} focused was not showing (match {score:.3f}) before OK.")
+                                  f"the channel was not playing before Ch Up (motion {motion:.1f}).")
         frame_capture.clear_buffer()
-        print(f"[RUN {run_idx}] STEP 3: OK launches {APP_NAME}; the timer starts now.")
-        ok_pressed_at = send_key('OK', manufacturer)
+        print(f"[RUN {run_idx}] Ch Up; the timer starts now.")
+        key_pressed_at = send_key('ChUp', configuration['manufacturer'])
         winsound.Beep(1500, 300)
-        return measure_stream_start(frame_capture, roi, motion_threshold, run_idx, output_dir,
-                                    configuration['timeout'], ok_pressed_at, pre_frames)
+        return measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir,
+                                configuration['timeout'], key_pressed_at, pre_frames, last_roi)
     finally:
         frame_capture.stop()
+
+
+def watch(camera, seconds, run_idx):
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        frame = read_frame(camera)
+        if frame is not None:
+            remaining = end - time.perf_counter()
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [
+                (f"RUN {run_idx} next Ch Up in {remaining:.1f} s", (0, 255, 255), 1.0)]))
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            raise KeyboardInterrupt("Measurement canceled by user.")
 
 
 def main():
@@ -806,14 +881,13 @@ def main():
         )
         os.makedirs(calibration_dir, exist_ok=True)
 
+        # Input 1: where Samsung TV Plus is on Home.
         route = calibrate_route(configuration, camera)
         replay_route(route, configuration['manufacturer'], camera)
         context = {'home_ready': capture_home_ready(camera)}
-        roi, motion_threshold = setup_stream_detection(configuration, camera, calibration_dir, context)
-        # The user may have picked a different Live TV on the waiting screen.
-        route = configuration['route']
-        home_ready = context['home_ready']
-        cv2.imwrite(os.path.join(calibration_dir, "home_ready.jpg"), home_ready)
+        send_key('OK', configuration['manufacturer'])
+        # Input 2: which Live TV channel to enter inside TV Plus.
+        roi, motion_threshold = enter_live_channel(configuration, camera, calibration_dir, context)
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
@@ -824,24 +898,19 @@ def main():
                 f"_SWV{configuration['SWV']}_LGCV{configuration['LGCV']}"
             )
             os.makedirs(output_dir, exist_ok=True)
-            print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] {APP_NAME} launch\n{'=' * 60}")
+            print(f"\n{'=' * 60}\n  [RUN {run_idx}/{configuration['num_runs']}] Ch Up zap\n{'=' * 60}")
 
-            result = run_once(configuration, camera, run_idx, output_dir, route, home_ready, roi, motion_threshold)
-
+            result = zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold)
             if result['status'] != 'INVALID':
                 make_run_videos(output_dir, run_label=f"RUN {run_idx}",
                                 end_ms=result['response_time_ms'] if result['status'] == 'PASS' else None)
-            # Leave the app so the next run starts from Home.
-            send_key('Home', configuration['manufacturer'])
-            time.sleep(EXIT_WAIT_SECONDS)
 
             results.append(result)
             row = {
                 'TC': 'Omedia_TC02',
                 'Run': result['run'],
                 'Timestamp': timestamp,
-                'Standby_Seconds': configuration['standby_seconds'],
-                'Stream_Start_ms': (
+                'Zap_Time_ms': (
                     round(result['response_time_ms'], 2) if result['response_time_ms'] is not None else None
                 ),
                 'Frames': result['frame_count'],
@@ -863,18 +932,18 @@ def main():
                 'SoC': configuration['SoC'],
                 'SWV': configuration['SWV'],
                 'LGCV': configuration['LGCV'],
-                'Standby_Seconds': configuration['standby_seconds'],
                 'Motion_Threshold': round(motion_threshold, 2),
-                'Route': ' '.join(route),
-                'Stream_Start_ms': row['Stream_Start_ms'],
+                'Zap_Time_ms': row['Zap_Time_ms'],
                 'Frames': row['Frames'],
                 'Status': row['Status'],
             })
+            if run_idx < configuration['num_runs']:
+                watch(camera, configuration['zap_interval_seconds'], run_idx + 1)
 
         passed = sum(result['status'] == 'PASS' for result in results)
-        invalid = [result for result in results if result['status'] == 'INVALID']
-        for result in invalid:
-            print(f"Run {result['run']} INVALID: {result.get('reason', '')}")
+        for result in results:
+            if result['status'] == 'INVALID':
+                print(f"Run {result['run']} INVALID: {result.get('reason', '')}")
         print(f"\nOmedia_TC02 complete: {passed}/{len(results)} runs passed.")
         for frequency in (1500, 2000, 2500):
             winsound.Beep(frequency, 200)
