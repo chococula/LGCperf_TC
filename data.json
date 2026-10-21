@@ -1,5 +1,5 @@
 {
- "publishedAt": "2026-10-21T07:25:26+00:00",
+ "publishedAt": "2026-10-21T23:59:40+00:00",
  "data": {
   "Omedia_TC01": [
    {
@@ -66,6 +66,68 @@
     "Row_ID": "pub-5",
     "Video": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.gif"
+   }
+  ],
+  "Omedia_TC02": [
+   {
+    "TC": "Omedia_TC02",
+    "Run": "1",
+    "Timestamp": "20261021_165532",
+    "Zap_Time_ms": "5643.84",
+    "Frames": "216",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_01_20261021_165532_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-tc02-1",
+    "Video": "media/Omedia_TC02_01_20261021_165532_U8000_SWV1300_LGCV8.2.008.mp4",
+    "GIF": "media/Omedia_TC02_01_20261021_165532_U8000_SWV1300_LGCV8.2.008.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "2",
+    "Timestamp": "20261021_165603",
+    "Zap_Time_ms": "3869.58",
+    "Frames": "162",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_02_20261021_165603_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-tc02-2",
+    "Video": "media/Omedia_TC02_02_20261021_165603_U8000_SWV1300_LGCV8.2.008.mp4",
+    "GIF": "media/Omedia_TC02_02_20261021_165603_U8000_SWV1300_LGCV8.2.008.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "3",
+    "Timestamp": "20261021_165633",
+    "Zap_Time_ms": "4877.58",
+    "Frames": "192",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_03_20261021_165633_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-tc02-3",
+    "Video": "media/Omedia_TC02_03_20261021_165633_U8000_SWV1300_LGCV8.2.008.mp4",
+    "GIF": "media/Omedia_TC02_03_20261021_165633_U8000_SWV1300_LGCV8.2.008.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "4",
+    "Timestamp": "20261021_165703",
+    "Zap_Time_ms": "4074.93",
+    "Frames": "168",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_04_20261021_165703_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-tc02-4",
+    "Video": "media/Omedia_TC02_04_20261021_165703_U8000_SWV1300_LGCV8.2.008.mp4",
+    "GIF": "media/Omedia_TC02_04_20261021_165703_U8000_SWV1300_LGCV8.2.008.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "5",
+    "Timestamp": "20261021_165733",
+    "Zap_Time_ms": "4235.49",
+    "Frames": "174",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_05_20261021_165733_U8000_SWV1300_LGCV8.2.008",
+    "Row_ID": "pub-tc02-5",
+    "Video": "media/Omedia_TC02_05_20261021_165733_U8000_SWV1300_LGCV8.2.008.mp4",
+    "GIF": "media/Omedia_TC02_05_20261021_165733_U8000_SWV1300_LGCV8.2.008.gif"
    }
   ]
  }
