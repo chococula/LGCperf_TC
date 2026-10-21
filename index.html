@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<title>LGCperf Results</title>
+<script src="config.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: instrument-panel dashboard — readout tiles on top, trend + per-build comparison, full run log below. */
+  :root {
+    --bg: #f3f5f8; --panel: #ffffff; --text: #18202c; --muted: #5d6879; --line: #dde2ea;
+    --accent: #0f6fae; --on-accent: #ffffff;
+    --pass: #1b7a43; --pass-bg: #e5f4ea; --fail: #c0362c; --fail-bg: #fbe9e7; --warn: #9a5b00; --warn-bg: #fdf1dc;
+    --s1: #0f6fae; --s2: #c46a12; --s3: #2f8f6a; --s4: #7a4fc4; --s5: #c23d7a; --s6: #4f7d99;
+    --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+    --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0f141b; --panel: #171e27; --text: #e3e8ef; --muted: #93a0b2; --line: #28323f;
+      --accent: #5bb2ec; --on-accent: #0b1520;
+      --pass: #5fd08f; --pass-bg: #15301f; --fail: #f2837a; --fail-bg: #3a1b18; --warn: #f0b75e; --warn-bg: #3a2a10;
+      --s1: #5bb2ec; --s2: #f0a254; --s3: #5fd0a6; --s4: #b597f0; --s5: #f07fb3; --s6: #8fb4cc;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f141b; --panel: #171e27; --text: #e3e8ef; --muted: #93a0b2; --line: #28323f;
+    --accent: #5bb2ec; --on-accent: #0b1520;
+    --pass: #5fd08f; --pass-bg: #15301f; --fail: #f2837a; --fail-bg: #3a1b18; --warn: #f0b75e; --warn-bg: #3a2a10;
+    --s1: #5bb2ec; --s2: #f0a254; --s3: #5fd0a6; --s4: #b597f0; --s5: #f07fb3; --s6: #8fb4cc;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-body); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding-block: 24px 48px;
+          padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+          display: flex; flex-direction: column; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 24px; }
+  h1 { font: 600 30px/1 var(--font-display); letter-spacing: .01em; margin: 0; text-wrap: balance; }
+  .definition { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+  .definition code { font: 12px var(--font-mono); color: var(--text); }
+  .muted { color: var(--muted); }
+  #updated { font: 12px var(--font-mono); color: var(--muted); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tab { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+         padding: 6px 14px; border-radius: 6px; cursor: pointer; font: 500 13px var(--font-body); }
+  .tab .muted { font-family: var(--font-mono); font-size: 12px; margin-left: 4px; }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .tab.active .muted { color: inherit; opacity: .8; }
+  .tab:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 12px; }
+  .filters label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600;
+                   letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  select { font: 13px var(--font-body); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+           background: var(--panel); color: var(--text); min-width: 130px; text-transform: none; letter-spacing: 0; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+           background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .card { padding: 12px 16px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+  .card:last-child { border-right: 0; }
+  .card .label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .card .value { font: 600 30px/1.1 var(--font-display); font-variant-numeric: tabular-nums; }
+  .card .unit { font: 13px var(--font-body); color: var(--muted); }
+  .card.primary .value { color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; min-width: 0; }
+  .panel h2 { font: 600 18px/1.2 var(--font-display); letter-spacing: .02em; margin: 0 0 12px; }
+  .panel h2 .muted { font: 12px var(--font-mono); }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  .chart { width: 100%; overflow-x: auto; }
+  svg text { fill: var(--muted); font: 11px var(--font-mono); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .build { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+  .build-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+  .build-head span:last-child { font-family: var(--font-mono); color: var(--muted); }
+  .build-track { position: relative; height: 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .build-foot { font-size: 12px; }
+  .build-foot b { font: 600 16px var(--font-display); }
+  .table-wrap { overflow-x: auto; max-height: 560px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  td { font: 13px var(--font-mono); }
+  th { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+       position: sticky; top: 0; background: var(--panel); }
+  td.num { text-align: right; }
+  tr.new td { animation: flash 2.5s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 25%, transparent); } to { background: transparent; } }
+  @media (prefers-reduced-motion: reduce) { tr.new td { animation: none; } }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 4px; font: 600 11px var(--font-body); letter-spacing: .06em; }
+  .badge.PASS { color: var(--pass); background: var(--pass-bg); }
+  .badge.FAIL { color: var(--fail); background: var(--fail-bg); }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pass); margin-right: 6px; }
+  .filters input[type="date"] { font: 13px var(--font-body); padding: 5px 8px; border: 1px solid var(--line);
+           border-radius: 6px; background: var(--panel); color: var(--text); text-transform: none; letter-spacing: 0; }
+  .quick { display: flex; gap: 4px; align-self: flex-end; }
+  .btn { font: 500 12px var(--font-body); padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+         background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.danger { color: var(--fail); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .filters label.check { flex-direction: row; align-items: center; align-self: flex-end; gap: 6px; padding-bottom: 6px;
+                         text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 400; color: var(--text); }
+  .admin { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .admin input { font: 13px var(--font-body); padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+                 background: var(--panel); color: var(--text); width: 140px; }
+  .admin .on { color: var(--pass); font-weight: 600; }
+  tr.excluded td { color: var(--muted); }
+  tr.excluded td.metric { text-decoration: line-through; }
+  .chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px; font: 600 11px var(--font-body);
+          color: var(--warn); background: var(--warn-bg); }
+  .chip.excl { color: var(--muted); background: var(--bg); border: 1px solid var(--line); }
+  .reason-input { font: 12px var(--font-body); padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px;
+                  background: var(--panel); color: var(--text); width: 200px; }
+  .actions { display: flex; gap: 4px; align-items: center; }
+  .toast { color: var(--fail); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>LGCperf Results</h1>
+      <p class="definition">Time from the Power ON IR send until the camera frame reaches the Home similarity threshold (<code>TM_CCOEFF_NORMED</code>).</p>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+      <span id="updated"><span class="status-dot"></span>Loading…</span>
+      <div class="admin" id="admin"></div>
+    </div>
+  </header>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div class="filters">
+    <label>From<input type="date" id="f-from"></label>
+    <label>To<input type="date" id="f-to"></label>
+    <div class="quick">
+      <button class="btn" data-range="today">Today</button>
+      <button class="btn" data-range="7">7 days</button>
+      <button class="btn" data-range="30">30 days</button>
+      <button class="btn" data-range="all">All</button>
+    </div>
+    <label>Session<select id="f-Session"></select></label>
+    <label>SoC<select id="f-SoC"></select></label>
+    <label>SW Version<select id="f-SWV"></select></label>
+    <label>LG CV Version<select id="f-LGCV"></select></label>
+    <label>Status<select id="f-Status"></select></label>
+    <label>Metric<select id="metric"></select></label>
+    <label class="check"><input type="checkbox" id="show-excluded" checked> Show excluded rows</label>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>Measurements (in order)</h2>
+      <div class="chart" id="trend"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="panel">
+      <h2>Average by Build</h2>
+      <div class="chart" id="builds"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>All Runs <span class="muted" id="row-count"></span></h2>
+    <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value far from its build's median; it is a hint only.</p>
+    <div class="table-wrap"><table id="table"></table></div>
+  </div>
+</div>
+
+<script>
+const REFRESH_MS = 30000;
+const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
+const HIDDEN_COLUMNS = ['_row', 'Excluded', 'Excluded_At', 'Uploaded_At'];
+const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
+const KEY_STORAGE = 'lgcperf-admin-key';
+const IN_APPS_SCRIPT = !!(window.google && google.script && google.script.run);
+// On GitHub Pages, config.js sets window.LGCPERF_API_URL to the Apps Script web app URL.
+const API_URL = !IN_APPS_SCRIPT && window.LGCPERF_API_URL && !/XXXX/.test(window.LGCPERF_API_URL) ? window.LGCPERF_API_URL : '';
+const LIVE = IN_APPS_SCRIPT || !!API_URL;
+const state = { data: {}, tc: null, metric: null, seen: new Set(), firstLoad: true,
+                adminKey: null, editingRow: null, error: '' };
+
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function num(value) { const n = parseFloat(String(value).replace(/,/g, '')); return isFinite(n) ? n : null; }
+function fmt(n, digits = 0) { return n == null ? '–' : n.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }); }
+function buildKey(r) { return [r.SoC, r.SWV, r.LGCV].filter(Boolean).join(' / ') || 'Unknown'; }
+function rowId(r) { return state.tc + '|' + r._row; }
+function isExcluded(r) { return String(r.Excluded).toUpperCase() === 'Y'; }
+function dayOf(r) { const m = String(r.Timestamp).match(/^(\d{4})(\d{2})(\d{2})/); return m ? `${m[1]}-${m[2]}-${m[3]}` : ''; }
+function isoDay(date) { return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+
+function stats(values) {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  const std = Math.sqrt(values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length);
+  return { mean, median, std, min: sorted[0], max: sorted[sorted.length - 1] };
+}
+
+// ---------- server calls (google.script.run in Apps Script, local demo otherwise) ----------
+function call(name, args, onOk) {
+  const onFail = error => { state.error = error.message || String(error); renderAdmin(); render(); };
+  if (IN_APPS_SCRIPT) {
+    google.script.run.withSuccessHandler(onOk).withFailureHandler(onFail)[name](...args);
+  } else if (API_URL) {
+    apiCall(name, args).then(onOk, onFail);
+  } else {
+    try { onOk(demoServer[name](...args)); } catch (error) { onFail(error); }
+  }
+}
+
+// text/plain keeps the POST a "simple" CORS request, which Apps Script web apps accept.
+async function apiCall(name, args) {
+  let response;
+  if (name === 'getResults') {
+    response = await fetch(API_URL + '?action=data');
+  } else {
+    const body = name === 'checkAdminKey'
+      ? { action: 'checkKey', key: args[0] }
+      : { action: 'exclude', tc: args[0], row: args[1], excluded: args[2], reason: args[3], key: args[4] };
+    response = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+  }
+  if (!response.ok) throw new Error(`Server returned ${response.status}. Check the API URL in config.js.`);
+  const json = await response.json();
+  if (!json.ok) throw new Error(json.error || 'Request was rejected.');
+  return name === 'getResults' ? json.data : name === 'setExcluded' ? json.row : true;
+}
+
+function load() {
+  if (state.editingRow) return;  // don't wipe an exclusion being typed
+  call('getResults', [], onData);
+}
+
+function onData(data) {
+  state.data = data || {};
+  const tcs = Object.keys(state.data);
+  if (!state.tc || !state.data[state.tc]) state.tc = tcs[0] || null;
+  document.getElementById('updated').innerHTML = LIVE
+    ? '<span class="status-dot"></span>Updated ' + new Date().toLocaleTimeString() + ' · auto-refresh 30 s'
+    : 'Sample data · set the Apps Script URL in config.js to show real results';
+  renderTabs(tcs);
+  renderFilters();
+  render();
+  state.firstLoad = false;
+}
+
+// ---------- admin (exclude / restore) ----------
+function renderAdmin() {
+  const box = document.getElementById('admin');
+  const error = state.error ? `<span class="toast">${esc(state.error)}</span>` : '';
+  if (state.adminKey) {
+    box.innerHTML = `${error}<span class="on">Edit mode</span><button class="btn" id="admin-off">Lock</button>`;
+    document.getElementById('admin-off').onclick = () => {
+      state.adminKey = null; state.editingRow = null; state.error = '';
+      try { localStorage.removeItem(KEY_STORAGE); } catch (e) {}
+      renderAdmin(); render();
+    };
+  } else {
+    box.innerHTML = `${error}<input type="password" id="admin-key" placeholder="Admin key" autocomplete="off">` +
+      `<button class="btn" id="admin-on">Unlock editing</button>`;
+    const unlock = () => {
+      const key = document.getElementById('admin-key').value.trim();
+      if (!key) return;
+      call('checkAdminKey', [key], () => {
+        state.adminKey = key; state.error = '';
+        try { localStorage.setItem(KEY_STORAGE, key); } catch (e) {}
+        renderAdmin(); render();
+      });
+    };
+    document.getElementById('admin-on').onclick = unlock;
+    document.getElementById('admin-key').onkeydown = e => { if (e.key === 'Enter') unlock(); };
+  }
+}
+
+function setExcluded(row, excluded, reason) {
+  call('setExcluded', [state.tc, row._row, excluded, reason, state.adminKey], updated => {
+    Object.assign(row, updated);
+    state.editingRow = null; state.error = '';
+    renderAdmin(); render();
+  });
+}
+
+// ---------- filters ----------
+function renderTabs(tcs) {
+  const box = document.getElementById('tabs');
+  box.innerHTML = tcs.map(tc =>
+    `<button class="tab ${tc === state.tc ? 'active' : ''}" data-tc="${esc(tc)}">${esc(tc)}<span class="muted">${state.data[tc].length}</span></button>`
+  ).join('');
+  box.querySelectorAll('.tab').forEach(button => button.onclick = () => {
+    state.tc = button.dataset.tc; state.metric = null; state.editingRow = null;
+    renderTabs(tcs); renderFilters(); render();
+  });
+}
+
+function rowsForTc() { return state.tc ? state.data[state.tc] : []; }
+
+function renderFilters() {
+  const rows = rowsForTc();
+  FILTER_KEYS.forEach(key => {
+    const select = document.getElementById('f-' + key);
+    const current = select.value;
+    const options = [...new Set(rows.map(r => r[key]).filter(Boolean))].sort();
+    if (key === 'Session') options.reverse();
+    select.innerHTML = '<option value="">All</option>' + options.map(o => `<option>${esc(o)}</option>`).join('');
+    select.value = options.includes(current) ? current : '';
+    select.onchange = render;
+  });
+
+  const metricSelect = document.getElementById('metric');
+  const metrics = rows.length ? Object.keys(rows[0]).filter(k => /_ms$/i.test(k)) : [];
+  if (!metrics.includes(state.metric)) state.metric = metrics[0] || null;
+  metricSelect.innerHTML = metrics.map(m => `<option>${esc(m)}</option>`).join('');
+  metricSelect.value = state.metric || '';
+  metricSelect.onchange = () => { state.metric = metricSelect.value; render(); };
+}
+
+function setupStaticFilters() {
+  ['f-from', 'f-to', 'show-excluded'].forEach(id => document.getElementById(id).onchange = render);
+  document.querySelectorAll('[data-range]').forEach(button => button.onclick = () => {
+    const range = button.dataset.range, today = new Date();
+    const from = document.getElementById('f-from'), to = document.getElementById('f-to');
+    if (range === 'all') { from.value = ''; to.value = ''; }
+    else if (range === 'today') { from.value = to.value = isoDay(today); }
+    else { from.value = isoDay(new Date(today.getTime() - (Number(range) - 1) * 86400000)); to.value = isoDay(today); }
+    render();
+  });
+}
+
+// Rows matching every filter, including excluded ones (the table shows them; stats skip them).
+function filteredRows() {
+  const from = document.getElementById('f-from').value, to = document.getElementById('f-to').value;
+  return rowsForTc().filter(r => {
+    const day = dayOf(r);
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    return FILTER_KEYS.every(key => {
+      const value = document.getElementById('f-' + key).value;
+      return !value || r[key] === value;
+    });
+  });
+}
+
+// Flag values more than 3.5 robust z-scores (median/MAD) away from their build's median.
+function outlierSet(rows, metric) {
+  const groups = {};
+  rows.forEach(r => { const v = num(r[metric]); if (v != null) (groups[buildKey(r)] = groups[buildKey(r)] || []).push([r, v]); });
+  const flagged = new Set();
+  Object.values(groups).forEach(items => {
+    if (items.length < 5) return;
+    const med = stats(items.map(([, v]) => v)).median;
+    const mad = stats(items.map(([, v]) => Math.abs(v - med))).median;
+    if (!mad) return;
+    items.forEach(([r, v]) => { if (Math.abs(v - med) / (1.4826 * mad) > 3.5) flagged.add(r); });
+  });
+  return flagged;
+}
+
+// ---------- render ----------
+function render() {
+  const metric = state.metric;
+  const rows = filteredRows();
+  const included = rows.filter(r => !isExcluded(r));
+  const statRows = included.filter(r => r.Status !== 'FAIL');
+  const outliers = outlierSet(statRows, metric);
+  const values = statRows.map(r => num(r[metric])).filter(v => v != null);
+  renderCards(rows, included, statRows, outliers, stats(values));
+  renderTrend(included, metric, outliers);
+  renderBuilds(statRows, metric);
+  const shown = document.getElementById('show-excluded').checked ? rows : included;
+  renderTable(shown, metric, outliers, rows.length - included.length);
+}
+
+function renderCards(rows, included, statRows, outliers, s) {
+  const passRate = included.length ? (statRows.length / included.length) * 100 : null;
+  const latest = statRows[statRows.length - 1];
+  const cards = [
+    ['Runs used', fmt(statRows.length), `of ${fmt(rows.length)}`],
+    ['Pass rate', fmt(passRate, 1), '%'],
+    ['Latest', latest ? fmt(num(latest[state.metric])) : '–', 'ms'],
+    ['Average', fmt(s && s.mean), 'ms', 'primary'],
+    ['Median', fmt(s && s.median), 'ms'],
+    ['Min', fmt(s && s.min), 'ms'],
+    ['Max', fmt(s && s.max), 'ms'],
+    ['Std dev', fmt(s && s.std), 'ms'],
+    ['Excluded', fmt(rows.length - included.length), outliers.size ? `${outliers.size} outlier?` : ''],
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([label, value, unit, cls = '']) =>
+    `<div class="card ${cls}"><div class="label">${label}</div><div class="value">${value} <span class="unit">${unit}</span></div></div>`
+  ).join('');
+}
+
+function renderTrend(rows, metric, outliers) {
+  const box = document.getElementById('trend');
+  const legend = document.getElementById('legend');
+  const points = rows.map(r => ({ v: num(r[metric]), r })).filter(p => p.v != null);
+  if (!points.length) { box.innerHTML = '<div class="empty">No measurements in this range</div>'; legend.innerHTML = ''; return; }
+
+  const builds = [...new Set(points.map(p => buildKey(p.r)))];
+  const color = b => cssVar(SERIES_COLORS[builds.indexOf(b) % SERIES_COLORS.length]);
+  const W = Math.max(640, points.length * 14 + 80), H = 260, L = 56, R = 14, T = 12, B = 28;
+  const maxV = Math.max(...points.map(p => p.v)) * 1.1 || 1;
+  const x = i => L + (points.length === 1 ? (W - L - R) / 2 : (i / (points.length - 1)) * (W - L - R));
+  const y = v => T + (1 - v / maxV) * (H - T - B);
+
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Measurement trend">`;
+  for (let k = 0; k <= 4; k++) {
+    const v = (maxV / 4) * k, yy = y(v);
+    svg += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="${cssVar('--line')}"/>`;
+    svg += `<text x="${L - 6}" y="${yy + 4}" text-anchor="end">${fmt(v)}</text>`;
+  }
+  svg += `<text x="${L}" y="${H - 6}">oldest</text><text x="${W - R}" y="${H - 6}" text-anchor="end">latest</text>`;
+  builds.forEach(b => {
+    const series = points.map((p, idx) => ({ ...p, idx })).filter(p => buildKey(p.r) === b);
+    const path = series.map((p, k) => `${k ? 'L' : 'M'}${x(p.idx)},${y(p.v)}`).join(' ');
+    svg += `<path d="${path}" fill="none" stroke="${color(b)}" stroke-width="1.5" opacity="0.5"/>`;
+    series.forEach(p => {
+      const fail = p.r.Status === 'FAIL', odd = outliers.has(p.r);
+      const title = `${esc(b)}\nRun ${esc(p.r.Run)} · ${esc(p.r.Timestamp)}\n${fmt(p.v, 2)} ms${fail ? ' (FAIL)' : ''}${odd ? ' (outlier?)' : ''}`;
+      svg += fail
+        ? `<g><title>${title}</title><path d="M${x(p.idx) - 4},${y(p.v) - 4}l8,8m0,-8l-8,8" stroke="${cssVar('--fail')}" stroke-width="2" fill="none"/></g>`
+        : `<circle cx="${x(p.idx)}" cy="${y(p.v)}" r="4" fill="${color(b)}"${odd ? ` stroke="${cssVar('--warn')}" stroke-width="3"` : ''}><title>${title}</title></circle>`;
+    });
+  });
+  box.innerHTML = svg + '</svg>';
+  legend.innerHTML = builds.map(b => `<span><i style="background:${color(b)}"></i>${esc(b)}</span>`).join('') +
+    `<span style="color:var(--fail)">✕ FAIL</span><span style="color:var(--warn)">◯ outlier?</span><span class="muted">Excluded rows are not plotted</span>`;
+}
+
+function renderBuilds(statRows, metric) {
+  const box = document.getElementById('builds');
+  const groups = {};
+  statRows.forEach(r => { const v = num(r[metric]); if (v != null) (groups[buildKey(r)] = groups[buildKey(r)] || []).push(v); });
+  const entries = Object.entries(groups).map(([b, vs]) => [b, stats(vs), vs.length]);
+  if (!entries.length) { box.innerHTML = '<div class="empty">No passing runs in this range</div>'; return; }
+
+  const builds = [...new Set(filteredRows().filter(r => !isExcluded(r)).map(buildKey))];
+  const maxV = Math.max(...entries.map(([, s]) => s.max)) || 1;
+  box.innerHTML = entries.map(([b, s, n]) => {
+    const c = cssVar(SERIES_COLORS[builds.indexOf(b) % SERIES_COLORS.length]);
+    return `<div class="build">
+      <div class="build-head"><span>${esc(b)}</span><span>n=${n}</span></div>
+      <div class="build-track">
+        <div style="position:absolute;left:${(s.min / maxV) * 100}%;width:${((s.max - s.min) / maxV) * 100}%;top:7px;height:4px;background:${c};opacity:.4"></div>
+        <div style="width:${(s.mean / maxV) * 100}%;height:100%;background:${c};opacity:.85"></div>
+      </div>
+      <div class="build-foot"><b>${fmt(s.mean)} ms</b> <span class="muted">avg · ${fmt(s.min)}–${fmt(s.max)} ms</span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderTable(rows, metric, outliers, excludedCount) {
+  const table = document.getElementById('table');
+  document.getElementById('row-count').textContent = `(${rows.length} shown · ${excludedCount} excluded)`;
+  if (!rows.length) { table.innerHTML = '<tr><td class="empty">No runs in this range</td></tr>'; return; }
+
+  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Session', 'SoC', 'SWV', 'LGCV', 'Manufacturer'];
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k));
+  const columns = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
+  const head = '<tr>' + columns.map(c => `<th>${esc(c)}</th>`).join('') + (state.adminKey ? '<th>Action</th>' : '') + '</tr>';
+  const ordered = rows.slice().reverse();
+  const body = ordered.map((r, index) => {
+    const id = rowId(r);
+    const isNew = !state.firstLoad && !state.seen.has(id);
+    state.seen.add(id);
+    const excluded = isExcluded(r);
+    const cells = columns.map(c => {
+      if (c === 'Status') {
+        return `<td><span class="badge ${esc(r[c])}">${esc(r[c])}</span>` +
+          (excluded ? '<span class="chip excl">Excluded</span>' : outliers.has(r) ? '<span class="chip">Outlier?</span>' : '') + '</td>';
+      }
+      if (c === 'Exclude_Reason') return `<td>${esc(r[c])}</td>`;
+      const n = num(r[c]);
+      if (c === metric) return `<td class="num metric"><b>${fmt(n, 2)}</b></td>`;
+      return n != null && !['Timestamp', 'SWV', 'LGCV', 'Session'].includes(c)
+        ? `<td class="num">${esc(r[c])}</td>` : `<td>${esc(r[c])}</td>`;
+    }).join('');
+    return `<tr class="${isNew ? 'new' : ''} ${excluded ? 'excluded' : ''}">${cells}${state.adminKey ? actionCell(r, index) : ''}</tr>`;
+  }).join('');
+  table.innerHTML = head + body;
+
+  table.querySelectorAll('[data-act]').forEach(button => button.onclick = () => {
+    const r = ordered[Number(button.dataset.index)];
+    const act = button.dataset.act;
+    if (act === 'edit') { state.editingRow = rowId(r); render(); document.getElementById('reason-input').focus(); }
+    if (act === 'cancel') { state.editingRow = null; render(); }
+    if (act === 'confirm') {
+      const reason = document.getElementById('reason-input').value.trim();
+      if (!reason) { document.getElementById('reason-input').focus(); return; }
+      setExcluded(r, true, reason);
+    }
+    if (act === 'restore') setExcluded(r, false, '');
+  });
+  const input = document.getElementById('reason-input');
+  if (input) input.onkeydown = e => {
+    if (e.key === 'Enter') table.querySelector('[data-act="confirm"]').click();
+    if (e.key === 'Escape') table.querySelector('[data-act="cancel"]').click();
+  };
+}
+
+function actionCell(r, index) {
+  if (state.editingRow === rowId(r)) {
+    return `<td><div class="actions"><input class="reason-input" id="reason-input" placeholder="Reason (e.g. camera moved)">` +
+      `<button class="btn primary" data-act="confirm" data-index="${index}">Exclude</button>` +
+      `<button class="btn" data-act="cancel" data-index="${index}">Cancel</button></div></td>`;
+  }
+  return isExcluded(r)
+    ? `<td><button class="btn" data-act="restore" data-index="${index}">Restore</button></td>`
+    : `<td><button class="btn danger" data-act="edit" data-index="${index}">Exclude…</button></td>`;
+}
+
+// ---------- sample data for previews outside Apps Script ----------
+const demoServer = (() => {
+  const rows = [];
+  const builds = [['U8000', '1300', '8.2.008', 9200, 14], ['U8000', '1310', '8.2.010', 8400, 18]];
+  builds.forEach(([SoC, SWV, LGCV, base, day], b) => {
+    const session = `202610${day}_0930${b}0`;
+    for (let run = 1; run <= 8; run++) {
+      const fail = b === 0 && run === 4, spike = b === 1 && run === 6;
+      rows.push({
+        _row: rows.length + 2, Uploaded_At: '', TC: 'Omedia_TC01', Session: session, Run: run,
+        Timestamp: `202610${day}_${String(9 + run).padStart(2, '0')}1500`, Manufacturer: 'Samsung',
+        SoC, SWV, LGCV, Standby_Seconds: 300, Similarity_Threshold: 0.7,
+        Home_Time_ms: fail ? '20000.00' : spike ? '14820.40' : (base + Math.sin(run * 1.7) * 300).toFixed(2),
+        Frames: fail ? 590 : 270 + run * 3, Status: fail ? 'FAIL' : 'PASS',
+        Excluded: b === 0 && run === 7 ? 'Y' : '', Exclude_Reason: b === 0 && run === 7 ? 'Camera bumped during run' : '',
+      });
+    }
+  });
+  return {
+    getResults: () => ({ Omedia_TC01: rows }),
+    checkAdminKey: key => { if (key !== 'demo') throw new Error('Admin key is incorrect (use "demo" in the preview).'); return true; },
+    setExcluded: (tc, rowNumber, excluded, reason, key) => {
+      demoServer.checkAdminKey(key);
+      return { Excluded: excluded ? 'Y' : '', Exclude_Reason: excluded ? reason : '', Excluded_At: excluded ? new Date().toISOString() : '' };
+    },
+  };
+})();
+
+setupStaticFilters();
+try { state.adminKey = localStorage.getItem(KEY_STORAGE); } catch (e) {}
+renderAdmin();
+load();
+setInterval(load, REFRESH_MS);
+</script>
+</body>
+</html>
