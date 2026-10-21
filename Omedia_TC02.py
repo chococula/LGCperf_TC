@@ -15,6 +15,7 @@ import numpy as np
 import os
 import pandas as pd
 import queue
+
 import subprocess
 import threading
 import time
@@ -338,22 +339,31 @@ def screen_similarity(frame, reference):
 
 # ---------- calibration: route to Samsung TV Plus ----------
 
-def click_target(camera):
-    """Show the Home screen and let the user click Samsung TV Plus. Returns the point in frame pixels."""
+def click_target(camera, saved_point=None):
+    """Show the Home screen and ask where to go. Returns the point in frame pixels.
+
+    A previously chosen spot is pre-marked; Enter keeps it, a click picks a new one.
+    """
     window_name = f"Click {APP_NAME}"
     still = grab_still(camera)
-    selection = {'point': None}
+    selection = {'point': tuple(saved_point) if saved_point else None}
 
     def on_mouse(event, x, y, flags, parameter):
         if event == cv2.EVENT_LBUTTONDOWN:
             selection['point'] = (x, y)
 
-    print(f"\n[SETUP] Click {APP_NAME} on the Home screen image, then press Enter (R = refresh image, Q = cancel).")
+    print(f"\n[SETUP] Home screen shown. Click where to go ({APP_NAME}), then press Enter "
+          "(R = refresh image, Q = cancel).")
     cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback(window_name, on_mouse)
     while True:
         preview = still.copy()
-        message = f"Click {APP_NAME}, then press ENTER" if selection['point'] is None else "ENTER = go there,  click again to change"
+        if selection['point'] is None:
+            message = f"Click {APP_NAME}, then press ENTER"
+        elif saved_point and tuple(selection['point']) == tuple(saved_point):
+            message = "ENTER = go to the marked spot,  or click another"
+        else:
+            message = "ENTER = go there,  click again to change"
         draw_overlay(preview, [(message, (0, 255, 0), 1.0)])
         if selection['point'] is not None:
             cv2.drawMarker(preview, selection['point'], (0, 255, 0), cv2.MARKER_CROSS, 28, 2)
@@ -427,17 +437,29 @@ def auto_navigate(configuration, camera, target_point):
 
 
 def calibrate_route(configuration, camera, calibration_dir):
-    """Find (or reuse) the D-pad route from Home to Samsung TV Plus and the focused-tile image."""
+    """Show Home, ask the user where to go, and move there with the D-pad.
+
+    If the user keeps the previously chosen spot, the saved route is replayed and checked on camera;
+    otherwise (or if it misses) the route is found again by watching the focus move.
+    """
     manufacturer = configuration['manufacturer']
     saved_focus = cv2.imread(FOCUS_REFERENCE_FILE) if os.path.isfile(FOCUS_REFERENCE_FILE) else None
-    if configuration['route'] and configuration['target_point'] and saved_focus is not None:
-        print(f"\n[SETUP] Saved route to {APP_NAME}: {', '.join(configuration['route'])}")
-        if input("Reuse the saved route? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
-            return configuration['route'], tuple(configuration['target_point']), saved_focus
+    saved_route = configuration['route'] if saved_focus is not None else []
+    saved_point = tuple(configuration['target_point']) if saved_route and configuration['target_point'] else None
 
     while True:
         press_home(manufacturer, camera)
-        target_point = click_target(camera)
+        target_point = click_target(camera, saved_point)
+        if saved_point and tuple(target_point) == saved_point:
+            print(f"[SETUP] Going to the marked spot with the saved route: {', '.join(saved_route)}")
+            replay_route(saved_route, manufacturer, camera)
+            frame = grab_still(camera)
+            score = nav.region_similarity(saved_focus, frame, target_point)
+            print(f"[SETUP] Focus match {score:.2f} (needs {FOCUS_MATCH_THRESHOLD:.2f})")
+            if score >= FOCUS_MATCH_THRESHOLD:
+                return saved_route, target_point, saved_focus
+            print("[SETUP] The saved route missed; finding the spot again with the camera.")
+            press_home(manufacturer, camera)
         route, focus_frame, focus_box = [], None, None
         try:
             route, focus_frame, focus_box = auto_navigate(configuration, camera, target_point)
