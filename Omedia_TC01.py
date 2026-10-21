@@ -1,4 +1,4 @@
-﻿import cv2
+import cv2
 import numpy as np
 import os
 import pandas as pd
@@ -11,6 +11,7 @@ from datetime import datetime
 
 from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
+from result_uploader import upload_result, wait_for_uploads
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +36,7 @@ RAW_IR_KEYSETS = {
 CAMERA_INDEX = 1
 STANDBY_SECONDS = 300
 CAPTURE_WINDOW = "Omedia_TC01 Capture"
+FRAME_CAPTURE_SIMILARITY = 0.85
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC01_response.csv")
 
 
@@ -297,56 +299,110 @@ def send_key(key_name, manufacturer):
     return action_started_at
 
 
+class FrameWriter:
+    """Save frames on a background thread so disk writes never stall frame processing."""
+
+    def __init__(self, frames_dir):
+        self.frames_dir = frames_dir
+        self.frames = queue.Queue()
+        self.saved = 0
+        os.makedirs(frames_dir, exist_ok=True)
+        self.thread = threading.Thread(target=self._write_loop, daemon=True)
+        self.thread.start()
+
+    def _write_loop(self):
+        while True:
+            item = self.frames.get()
+            if item is None:
+                return
+            filename, frame = item
+            if cv2.imwrite(os.path.join(self.frames_dir, filename), frame):
+                self.saved += 1
+
+    def save(self, filename, frame):
+        self.frames.put((filename, frame))
+
+    def close(self):
+        pending = self.frames.qsize()
+        if pending:
+            print(f"Writing {pending} remaining frames to disk...")
+        self.frames.put(None)
+        self.thread.join()
+
+
 def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                       similarity_threshold, power_on_at):
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
+    detected_elapsed_ms = None
+    frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
 
-    print(f"[RUN {run_idx}] Waiting for Home screen...")
-    while time.perf_counter() - power_on_at <= timeout:
-        captured = frame_capture.get_frame()
-        if captured is None:
-            continue
+    print(f"[RUN {run_idx}] Waiting for Home screen (saving every frame until similarity "
+          f"{FRAME_CAPTURE_SIMILARITY:.2f})...")
+    try:
+        while time.perf_counter() - power_on_at <= timeout:
+            captured = frame_capture.get_frame()
+            if captured is None:
+                continue
 
-        captured_at, frame = captured
-        if captured_at < power_on_at:
-            continue
+            captured_at, frame = captured
+            if captured_at < power_on_at:
+                continue
 
-        frame_count += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
-            raise RuntimeError("Camera frame is smaller than the saved Home reference.")
+            frame_count += 1
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
+                raise RuntimeError("Camera frame is smaller than the saved Home reference.")
 
-        match = cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)
-        score = float(np.max(match))
-        elapsed_ms = (captured_at - power_on_at) * 1000.0
-        last_elapsed_ms = elapsed_ms
-
-        detected = score >= similarity_threshold
-        status_color = (0, 255, 0) if detected else (0, 255, 255)
-        overlay = [
-            (f"RUN {run_idx}  TIMER {elapsed_ms / 1000.0:.3f} s", status_color, 1.4),
-            (f"Similarity {score:.3f} / {similarity_threshold:.3f}", status_color, 1.0),
-        ]
-        if detected:
-            overlay.append(("HOME DETECTED", (0, 255, 0), 1.2))
-        draw_overlay(frame, overlay)
-        cv2.imshow(CAPTURE_WINDOW, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            raise KeyboardInterrupt("Measurement canceled by user.")
-
-        if detected:
-            cv2.imwrite(os.path.join(output_dir, "RESULT_HOME.jpg"), frame)
-            winsound.Beep(1500, 250)
-            winsound.Beep(2500, 350)
-            cv2.waitKey(2000)
-            print(
-                f"[RUN {run_idx}] Home similarity threshold reached in "
-                f"{elapsed_ms:.2f} ms (match {score:.3f}, threshold {similarity_threshold:.3f})."
+            match = cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)
+            score = float(np.max(match))
+            elapsed_ms = (captured_at - power_on_at) * 1000.0
+            last_elapsed_ms = elapsed_ms
+            frame_writer.save(
+                f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg", frame.copy()
             )
-            break
+
+            newly_detected = not detected and score >= similarity_threshold
+            if newly_detected:
+                detected = True
+                detected_elapsed_ms = elapsed_ms
+
+            shown_ms = detected_elapsed_ms if detected else elapsed_ms
+            status_color = (0, 255, 0) if detected else (0, 255, 255)
+            overlay = [
+                (f"RUN {run_idx}  TIMER {shown_ms / 1000.0:.3f} s", status_color, 1.4),
+                (f"Similarity {score:.3f} / {similarity_threshold:.3f}", status_color, 1.0),
+            ]
+            if detected:
+                overlay.append(("HOME DETECTED", (0, 255, 0), 1.2))
+                overlay.append((f"Saving frames until {FRAME_CAPTURE_SIMILARITY:.2f}...", (255, 255, 255), 0.8))
+            draw_overlay(frame, overlay)
+            cv2.imshow(CAPTURE_WINDOW, frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                raise KeyboardInterrupt("Measurement canceled by user.")
+
+            if newly_detected:
+                cv2.imwrite(os.path.join(output_dir, "RESULT_HOME.jpg"), frame)
+                print(
+                    f"[RUN {run_idx}] Home similarity threshold reached in "
+                    f"{elapsed_ms:.2f} ms (match {score:.3f}, threshold {similarity_threshold:.3f})."
+                )
+                winsound.Beep(1500, 250)
+                winsound.Beep(2500, 350)
+
+            if score >= FRAME_CAPTURE_SIMILARITY:
+                print(f"[RUN {run_idx}] Similarity {score:.3f} reached {FRAME_CAPTURE_SIMILARITY:.2f}; "
+                      f"frame capture stopped at {elapsed_ms:.2f} ms.")
+                break
+    finally:
+        frame_writer.close()
+        print(f"[RUN {run_idx}] Saved {frame_writer.saved} frames to {frame_writer.frames_dir}")
+
+    if detected:
+        cv2.waitKey(2000)
+        last_elapsed_ms = detected_elapsed_ms
 
     if not detected:
         print(f"[RUN {run_idx}] Home screen not detected within {timeout:g} seconds.")
@@ -434,6 +490,21 @@ def main():
                 header=not os.path.exists(CSV_PATH),
                 index=False,
             )
+            upload_result({
+                'TC': row['TC'],
+                'Session': calibration_timestamp,
+                'Run': row['Run'],
+                'Timestamp': timestamp,
+                'Manufacturer': configuration['manufacturer'],
+                'SoC': configuration['SoC'],
+                'SWV': configuration['SWV'],
+                'LGCV': configuration['LGCV'],
+                'Standby_Seconds': STANDBY_SECONDS,
+                'Similarity_Threshold': configuration['home_similarity_threshold'],
+                'Home_Time_ms': row['Home_Time_ms'],
+                'Frames': row['Frames'],
+                'Status': row['Status'],
+            })
 
         passed = sum(result['detected'] for result in results)
         print(f"\nOmedia_TC01 complete: {passed}/{len(results)} runs passed.")
@@ -448,6 +519,7 @@ def main():
         if camera is not None:
             camera.release()
         cv2.destroyAllWindows()
+        wait_for_uploads()
 
 
 if __name__ == "__main__":

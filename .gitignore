@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 *.pyo
+result_upload_config.json
+result_upload_pending.jsonl
