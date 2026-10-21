@@ -31,6 +31,7 @@
     --pass: #5fd08f; --pass-bg: #15301f; --fail: #f2837a; --fail-bg: #3a1b18; --warn: #f0b75e; --warn-bg: #3a2a10;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font-body); }
   .wrap { max-width: 1440px; margin: 0 auto; padding-block: 24px 48px;
           padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
@@ -174,7 +175,7 @@
   <div id="confirm"></div>
 
   <div class="table-wrap"><table id="table"></table></div>
-  <p class="help">Build 2026-10-21 b3</p>
+  <p class="help">Build 2026-10-21 b4</p>
   <p class="help">Double-click a cell to change just that value. Use Edit for the whole row. Row_ID and Uploaded_At are set automatically.</p>
 </div>
 
@@ -716,6 +717,7 @@ $('csv-file').onchange = e => {
 $('reload-file').onclick = () => reloadFile().catch(error => toast(error.message, { error: true }));
 $('download').onclick = downloadCsv;
 $('use-sheet').onclick = () => {
+  if (!API_URL) return;
   if (state.file && state.file.dirty && !window.confirm('Your CSV edits are not saved. Switch anyway?')) return;
   Object.assign(state, { mode: 'sheet', selected: new Set(), confirm: null, file: null });
   loadSheet();
