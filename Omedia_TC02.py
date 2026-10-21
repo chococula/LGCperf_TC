@@ -71,6 +71,13 @@ GUIDE_OPEN_SECONDS = 5.0        # Guide method: stay on the GUIDE this long afte
 ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
 TILE_STEP_RATIO = 1.15         # fallback step (tile size + gap) when the next tile cannot be measured
 PRE_ROLL_SECONDS = 2.0
+STEP_FRAMES = 6                 # landing area: change is measured against the frame this many frames earlier
+ARM_STEP = 10                   # change of the area when the GUIDE closes
+LANDING_STEP = 15               # change of the area when the picture lands (loading drift stays below this)
+QUIET_FRAMES = 9                # ~0.3 s without change after the GUIDE closed = loading screen
+PERSIST_SECONDS = 0.5           # the landed picture must stay different from the loading screen this long
+NO_GUIDE_CHANGE_MS = 3000       # if the area never changed when the GUIDE closed, start waiting anyway
+ONSET_STEP = 8                  # the landing time is the first frame that moved this far from the loading screen
 STEP_LOAD_SECONDS = 6           # saved navigation: wait after each OK for the next screen to load
 HOME_SETTLE_SECONDS = 3
 KEY_GAP_SECONDS = 0.5
@@ -628,8 +635,19 @@ def measure_playing_motion(camera, roi, seconds=2.0):
 
 
 def calibrate_playback(configuration, camera, calibration_dir):
-    """After the last precondition step the channel plays; measure its motion for the zap detection."""
+    """After the last precondition step the channel plays; set up what marks the next channel's start.
+
+    Guide method: the user picks an area that is empty while loading (landing area).
+    Ch Up method: the motion of the middle of the playing picture.
+    """
     frame = wait_until_playing(camera, "Waiting for the channel to play.")
+    cv2.imwrite(os.path.join(calibration_dir, "live_channel.jpg"), frame)
+    if configuration['zap_method'] == 'Guide':
+        roi = select_landing_area(configuration, camera, calibration_dir)
+        configuration['stream_roi'] = roi
+        save_configuration(CONFIG_FILE, configuration)
+        wait_until_playing(camera, "Waiting for the channel to play again.")
+        return roi, LANDING_STEP
     roi = auto_stream_roi(frame.shape)
     playing = measure_playing_motion(camera, roi)
     threshold = max(MIN_MOTION_THRESHOLD, playing * MOTION_THRESHOLD_RATIO)
@@ -639,7 +657,6 @@ def calibrate_playback(configuration, camera, calibration_dir):
     configuration['stream_roi'] = roi
     configuration['motion_threshold'] = float(threshold)
     save_configuration(CONFIG_FILE, configuration)
-    cv2.imwrite(os.path.join(calibration_dir, "live_channel.jpg"), frame)
     return roi, threshold
 
 
@@ -854,31 +871,186 @@ def capture_pre_roll(frame_capture, roi, seconds=PRE_ROLL_SECONDS):
     return pre_frames, previous, (float(np.median(motions)) if motions else 0.0)
 
 
-def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold):
-    """Samsung: OK, OK opens the GUIDE, Down picks the next channel; OK starts the timer."""
+def region_small(frame, roi):
+    """Blurred, reduced grayscale copy of the area (small details and noise do not count)."""
+    x, y, w, h = roi
+    gray = cv2.GaussianBlur(cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY), (5, 5), 0)
+    return cv2.resize(gray, (max(8, w // 4), max(8, h // 4)), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
+def guide_keys(configuration, camera, label):
+    """OK, OK opens the GUIDE, Down selects the next channel (the timed OK is sent by the caller)."""
     manufacturer = configuration['manufacturer']
-    print(f"[RUN {run_idx}] OK, OK (GUIDE), Down (next channel)...")
     for key, pause in (('OK', GUIDE_KEY_GAP_SECONDS), ('OK', GUIDE_OPEN_SECONDS), ('Down', GUIDE_KEY_GAP_SECONDS)):
         send_key(key, manufacturer)
         end = time.perf_counter() + pause
         while time.perf_counter() < end:
             frame = read_frame(camera)
             if frame is not None:
-                cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [(f"RUN {run_idx}  {key} sent", (255, 255, 255), 1.0)]))
+                cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [(f"{label}  {key} sent", (255, 255, 255), 1.0)]))
             cv2.waitKey(1)
+
+
+def select_landing_area(configuration, camera, calibration_dir):
+    """One unmeasured channel change; the user drags an area that is empty (black) while it loads.
+
+    That area is black/empty until the full-screen picture lands, so a lasting change there is the landing.
+    """
+    print("\n[SETUP] One unmeasured channel change to choose the landing area.")
+    guide_keys(configuration, camera, "SETUP")
+    send_key('OK', configuration['manufacturer'])
+    print("[SETUP] Press ENTER in the camera window while the screen is black/loading (before the picture appears).")
+    for _ in range(50):
+        if cv2.waitKey(1) == -1:
+            break
+    while True:
+        frame = read_frame(camera)
+        if frame is None:
+            continue
+        cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame.copy(), [
+            ("ENTER while the screen is black / loading", (0, 255, 255), 1.0)]))
+        key = cv2.waitKey(1) & 0xFF
+        if key in (10, 13):
+            break
+        if key == ord('q'):
+            raise KeyboardInterrupt("Setup canceled.")
+    cv2.imwrite(os.path.join(calibration_dir, "loading_screen.jpg"), frame)
+    window_name = "Select the landing area"
+    while True:
+        print("[SETUP] Drag over an area that is EMPTY (black) on this loading screen and filled by the picture "
+              "when it lands, then press Enter.")
+        preview = draw_overlay(frame.copy(), [("Drag an EMPTY (black) area, then ENTER", (0, 255, 0), 1.0)])
+        x, y, w, h = (int(v) for v in cv2.selectROI(window_name, preview, showCrosshair=True, fromCenter=False))
+        cv2.destroyWindow(window_name)
+        if w >= 20 and h >= 20:
+            return [x, y, w, h]
+        print("[SETUP] The box is too small; drag a larger area.")
+
+
+def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_pressed_at, pre_frames=()):
+    """Time from OK until the full-screen picture lands, judged in an area that is empty while loading.
+
+    Phases: 'closing' (the GUIDE disappears: the area changes once, then goes quiet), 'loading' (quiet),
+    then the first large change that lasts PERSIST_SECONDS is the landing; its first frame is the time.
+    """
+    x, y, w, h = roi
+    # (elapsed_ms, area) for the last STEP_FRAMES frames
+    history = [((captured_at - key_pressed_at) * 1000.0, region_small(frame, roi))
+               for captured_at, frame, _ in list(pre_frames)[-STEP_FRAMES:]]
+    phase, seen_change, quiet = 'closing', False, 0
+    candidate = None                 # (elapsed_ms, area before the change)
+    detected, detected_elapsed_ms, stop_at_ms, result_saved = False, None, None, False
+    frame_count, last_elapsed_ms = 0, 0.0
+    frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
+
+    def annotate(image, lines):
+        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 255), 2)
+        return draw_overlay(image, lines)
+
+    pre_index = 0
+    for captured_at, frame, _ in pre_frames:
+        elapsed_ms = (captured_at - key_pressed_at) * 1000.0
+        if elapsed_ms < -PRE_ROLL_SECONDS * 1000.0 or elapsed_ms >= 0:
+            continue
+        pre_index += 1
+        frame_writer.save(
+            f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim0.000.jpg",
+            annotate(frame, [(f"RUN {run_idx}  BEFORE OK  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4)]),
+        )
+
+    print(f"[RUN {run_idx}] Waiting for the picture to land in the selected area "
+          f"(change >= {LANDING_STEP:.0f} lasting {PERSIST_SECONDS:g} s after the loading screen)...")
+    try:
+        while time.perf_counter() - key_pressed_at <= timeout:
+            captured = frame_capture.get_frame()
+            if captured is None:
+                continue
+            captured_at, frame = captured
+            if captured_at < key_pressed_at:
+                continue
+            frame_count += 1
+            elapsed_ms = (captured_at - key_pressed_at) * 1000.0
+            last_elapsed_ms = elapsed_ms
+            current = region_small(frame, roi)
+            reference = history[0][1] if len(history) >= STEP_FRAMES else None
+            step = float(np.mean(np.abs(current - reference))) if reference is not None else 0.0
+            history.append((elapsed_ms, current))
+            history = history[-STEP_FRAMES:]
+
+            if not detected:
+                if phase == 'closing':
+                    if step >= ARM_STEP:
+                        seen_change, quiet = True, 0
+                    elif seen_change or elapsed_ms > NO_GUIDE_CHANGE_MS:
+                        quiet += 1
+                        if quiet >= QUIET_FRAMES:
+                            phase = 'loading'
+                elif candidate is None:
+                    if step >= LANDING_STEP:
+                        # The change started at the first frame since the reference that moved away from it.
+                        onset = next(t for t, area in history[1:]
+                                     if float(np.mean(np.abs(area - reference))) >= ONSET_STEP)
+                        candidate = (onset, reference)
+                elif elapsed_ms - candidate[0] >= PERSIST_SECONDS * 1000.0:
+                    if float(np.mean(np.abs(current - candidate[1]))) >= LANDING_STEP * 0.6:
+                        detected, detected_elapsed_ms = True, candidate[0]
+                        stop_at_ms = elapsed_ms + STREAM_EXTRA_SECONDS * 1000.0
+                        print(f"[RUN {run_idx}] Landed at {detected_elapsed_ms:.2f} ms.")
+                        winsound.Beep(1500, 250)
+                        winsound.Beep(2500, 350)
+                    else:
+                        candidate = None          # a flash, not the picture: keep waiting
+
+            color = (0, 255, 0) if detected else (0, 255, 255)
+            lines = [
+                (f"RUN {run_idx}  #{frame_count}  TIMER {elapsed_ms / 1000.0:.3f} s", color, 1.4),
+                (f"Change {step:.0f} / {LANDING_STEP:.0f}  [{'landed' if detected else phase}]", color, 1.0),
+            ]
+            if detected:
+                lines.append((f"LANDED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+            frame_writer.save(f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{min(step / LANDING_STEP, 9.999):.3f}.jpg",
+                              annotate(frame.copy(), lines))
+            shown = detected_elapsed_ms if detected else elapsed_ms
+            live = [(f"RUN {run_idx}  TIMER {shown / 1000.0:.3f} s", color, 1.4), lines[1]]
+            cv2.imshow(CAPTURE_WINDOW, annotate(frame, live))
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                raise KeyboardInterrupt("Measurement canceled by user.")
+            if detected and not result_saved:
+                cv2.imwrite(os.path.join(output_dir, "RESULT_LANDED.jpg"), frame)
+                result_saved = True
+            if stop_at_ms is not None and elapsed_ms >= stop_at_ms:
+                break
+    finally:
+        frame_writer.close()
+        print(f"[RUN {run_idx}] Saved {frame_writer.saved} frames to {frame_writer.frames_dir}")
+
+    if not detected:
+        print(f"[RUN {run_idx}] No landing within {timeout:g} seconds.")
+        winsound.Beep(400, 700)
+    return {
+        'run': run_idx,
+        'status': 'PASS' if detected else 'FAIL',
+        'response_time_ms': detected_elapsed_ms if detected else last_elapsed_ms,
+        'frame_count': frame_count,
+        'directory': output_dir,
+    }
+
+
+def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold):
+    """Samsung: OK, OK opens the GUIDE, Down picks the next channel; OK starts the timer."""
+    manufacturer = configuration['manufacturer']
+    print(f"[RUN {run_idx}] OK, OK (GUIDE), Down (next channel)...")
+    guide_keys(configuration, camera, f"RUN {run_idx}")
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
-        pre_frames, last_roi, guide_motion = capture_pre_roll(frame_capture, roi)
+        pre_frames, _, _ = capture_pre_roll(frame_capture, roi)
         frame_capture.clear_buffer()
         print(f"[RUN {run_idx}] OK on the next channel; the timer starts now.")
         key_pressed_at = send_key('OK', manufacturer)
         winsound.Beep(1500, 300)
-        # A still GUIDE counts as the "picture stopped" phase; the first motion after OK is the new channel.
-        start_still = MIN_STILL_FRAMES if guide_motion < motion_threshold else 0
-        return measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir,
-                                configuration['timeout'], key_pressed_at, pre_frames, last_roi,
-                                key_label="OK", start_still=start_still)
+        return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
+                               key_pressed_at, pre_frames)
     finally:
         frame_capture.stop()
 
@@ -935,6 +1107,10 @@ def main():
 
         model = configuration['SoC']
         saved_navigation = configuration['navigation'].get(model)
+        expected_detector = 'landing_area' if configuration['zap_method'] == 'Guide' else 'motion'
+        if saved_navigation and saved_navigation.get('detector') != expected_detector:
+            print(f"[SETUP] The saved navigation for {model} was made for another detection method; set it up again.")
+            saved_navigation = None
         if saved_navigation and input(f"Use the saved navigation for {model} (no clicks needed)? (Y/n): "
                                       ).strip().lower() in ('', 'y', 'yes'):
             roi, motion_threshold = replay_saved_navigation(configuration, camera, saved_navigation)
@@ -954,6 +1130,8 @@ def main():
                 'plan_steps': configuration['plan_steps'],
                 'stream_roi': [int(v) for v in roi],
                 'motion_threshold': float(motion_threshold),
+                'zap_method': configuration['zap_method'],
+                'detector': 'landing_area' if configuration['zap_method'] == 'Guide' else 'motion',
             }
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
