@@ -12,6 +12,7 @@ from datetime import datetime
 from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
+from run_video import make_run_videos
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +38,7 @@ CAMERA_INDEX = 1
 STANDBY_SECONDS = 300
 CAPTURE_WINDOW = "Omedia_TC01 Capture"
 FRAME_CAPTURE_SIMILARITY = 0.85
+PRE_ROLL_SECONDS = 2.0
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC01_response.csv")
 
 
@@ -358,11 +360,15 @@ def home_similarity(frame, reference):
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
-def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, seconds=1.0):
-    """Before Power ON, confirm the screen does not already match Home (i.e. the TV really is off)."""
+def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
+    """Before Power ON, confirm the screen does not already match Home (i.e. the TV really is off).
+
+    The frames seen here are returned too, so the run video can start PRE_ROLL_SECONDS before Power ON.
+    """
     frame_capture.clear_buffer()
     max_score = None
     last_frame = None
+    pre_frames = []
     end_at = time.perf_counter() + seconds
     while time.perf_counter() < end_at or max_score is None:
         captured = frame_capture.get_frame(timeout=1.0)
@@ -370,12 +376,14 @@ def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, sec
             if time.perf_counter() > end_at + 2.0:
                 raise RuntimeError("No camera frames during the TV-off check.")
             continue
-        _, frame = captured
+        captured_at, frame = captured
         score = home_similarity(frame, reference)
         max_score = score if max_score is None else max(max_score, score)
         last_frame = frame
+        pre_frames.append((captured_at, frame.copy(), score))
 
     tv_off = max_score < similarity_threshold
+    last_frame = last_frame.copy()
     draw_overlay(last_frame, [
         (f"PRE-CHECK  similarity {max_score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
         ("TV OFF - OK" if tv_off else "TV NOT OFF - RUN INVALID", (0, 255, 0) if tv_off else (0, 0, 255), 1.2),
@@ -383,17 +391,32 @@ def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, sec
     cv2.imwrite(os.path.join(output_dir, "PRECHECK_BEFORE_POWER_ON.jpg"), last_frame)
     cv2.imshow(CAPTURE_WINDOW, last_frame)
     cv2.waitKey(1)
-    return tv_off, max_score
+    return tv_off, max_score, pre_frames
 
 
 def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
-                      similarity_threshold, power_on_at):
+                      similarity_threshold, power_on_at, pre_frames=()):
     frame_count = 0
     last_elapsed_ms = 0.0
     detected = False
     armed = False
     detected_elapsed_ms = None
     frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
+
+    # Pre-roll: the last PRE_ROLL_SECONDS before Power ON, saved with negative elapsed time for the video.
+    pre_index = 0
+    for captured_at, frame, score in pre_frames:
+        elapsed_ms = (captured_at - power_on_at) * 1000.0
+        if elapsed_ms < -PRE_ROLL_SECONDS * 1000.0 or elapsed_ms >= 0:
+            continue
+        pre_index += 1
+        frame_writer.save(
+            f"frame_p{pre_index:04d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
+            draw_overlay(frame, [
+                (f"RUN {run_idx}  BEFORE POWER ON  {elapsed_ms / 1000.0:.3f} s", (255, 255, 255), 1.4),
+                (f"Similarity {score:.3f} / {similarity_threshold:.3f}", (0, 255, 255), 1.0),
+            ]),
+        )
 
     print(f"[RUN {run_idx}] Waiting for Home screen (saving every frame until similarity "
           f"{FRAME_CAPTURE_SIMILARITY:.2f})...")
@@ -521,7 +544,7 @@ def main():
             frame_capture = CameraFrameCapture(camera)
             frame_capture.start()
             try:
-                tv_off, precheck_score = check_tv_off(
+                tv_off, precheck_score, pre_frames = check_tv_off(
                     frame_capture, reference, configuration['home_similarity_threshold'], output_dir
                 )
                 if not tv_off:
@@ -552,9 +575,14 @@ def main():
                         configuration['timeout'],
                         configuration['home_similarity_threshold'],
                         power_on_at,
+                        pre_frames,
                     )
             finally:
                 frame_capture.stop()
+
+            if result['status'] != 'INVALID':
+                make_run_videos(output_dir, threshold=configuration['home_similarity_threshold'],
+                                run_label=f"RUN {run_idx}")
 
             results.append(result)
             row = {
