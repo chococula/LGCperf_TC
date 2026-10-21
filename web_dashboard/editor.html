@@ -174,6 +174,7 @@
   <div id="confirm"></div>
 
   <div class="table-wrap"><table id="table"></table></div>
+  <p class="help">Build 2026-10-21 b3</p>
   <p class="help">Double-click a cell to change just that value. Use Edit for the whole row. Row_ID and Uploaded_At are set automatically.</p>
 </div>
 
@@ -498,8 +499,8 @@ function render() {
   $('download').className = csv && state.file.dirty ? 'btn primary' : 'btn';
   $('use-sheet').hidden = !(API_URL && csv);
   $('file-note').textContent = !csv ? '' : state.file.handle
-    ? (state.file.dirty ? 'Not saved to the file yet.' : 'Changes save to the file automatically.')
-    : (state.file.dirty ? 'Changes are only in this page. Download the CSV to keep them.' : 'This browser cannot save directly; use Download CSV after editing.');
+    ? (state.file.dirty ? 'Not saved to the file yet.' : 'Changes save to the file automatically. The dashboard in this browser shows this file.')
+    : (state.file.dirty ? 'Changes are only in this page (the dashboard in this browser shows them). Download the CSV to keep them.' : 'The dashboard in this browser shows this file. Use Download CSV to keep edits.');
   $('add').disabled = locked();
   renderAdmin();
 
