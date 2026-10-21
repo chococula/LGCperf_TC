@@ -173,16 +173,17 @@
 
   <div class="panel">
     <h2>All Runs <span class="muted" id="row-count"></span></h2>
-    <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value far from its build's median; it is a hint only.</p>
+    <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b5</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b6</p>
 </div>
 
 <script>
 const REFRESH_MS = 30000;
 const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
 const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At'];
+const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
 const IN_APPS_SCRIPT = !!(window.google && google.script && google.script.run);
@@ -378,7 +379,8 @@ function filteredRows() {
   });
 }
 
-// Flag values more than 3.5 robust z-scores (median/MAD) away from their build's median.
+// Flag values far from their build's median: more than 15% away AND more than 3.5 robust z-scores (median/MAD).
+// The 15% floor stops tiny differences from being flagged when runs are very consistent (MAD near 0).
 function outlierSet(rows, metric) {
   const groups = {};
   rows.forEach(r => { const v = num(r[metric]); if (v != null) (groups[buildKey(r)] = groups[buildKey(r)] || []).push([r, v]); });
@@ -387,8 +389,8 @@ function outlierSet(rows, metric) {
     if (items.length < 5) return;
     const med = stats(items.map(([, v]) => v)).median;
     const mad = stats(items.map(([, v]) => Math.abs(v - med))).median;
-    if (!mad) return;
-    items.forEach(([r, v]) => { if (Math.abs(v - med) / (1.4826 * mad) > 3.5) flagged.add(r); });
+    const limit = Math.max(3.5 * 1.4826 * mad, OUTLIER_MIN_FRACTION * med);
+    items.forEach(([r, v]) => { if (Math.abs(v - med) > limit) flagged.add(r); });
   });
   return flagged;
 }
