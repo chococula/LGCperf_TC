@@ -20,6 +20,13 @@ CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC01_config.json")
 REFERENCE_CHECK_SECONDS = 3.0   # at start: how long the live Home is compared with the reference
 SCREEN_MARGIN = 12              # the screen area is searched this many pixels around (small camera shifts)
 SCREEN_ROI = None               # [x, y, w, h] of the TV screen; only the screen is compared with Home
+# Second measurement in the same run: the screen came on and then stopped moving (still for SETTLE_SECONDS).
+SETTLE_ON_CHANGE = 10.0         # the screen differs this much from the off screen = it is on
+SETTLE_STILL_DIFF = 2.0         # frame-to-frame change below this = still (camera noise is ~0.5)
+SETTLE_SECONDS = 1.0            # still this long = movement stopped; the time is the first still frame
+SETTLE_EXTRA_SECONDS = 8.0      # after Home is detected, keep recording up to this long for the settle
+SETTLE_HOME_LIKE = 0.9          # still frames count only when they look like Home (>= 90% of the threshold),
+                                # so a still boot logo is not taken as the end
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'LG',
     'SoC': 'O22N3',
@@ -410,6 +417,13 @@ def home_similarity(frame, reference):
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
+def screen_small(frame):
+    """Blurred, reduced grayscale TV screen area for the movement measurement."""
+    x, y, w, h = SCREEN_ROI or (0, 0, frame.shape[1], frame.shape[0])
+    gray = cv2.GaussianBlur(cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY), (5, 5), 0)
+    return cv2.resize(gray, (max(8, w // 4), max(8, h // 4)), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
 def select_screen_area(reference, configuration, calibration_dir):
     """The user drags a box around the TV screen (picture area) on the Home reference; saved per SoC."""
     global SCREEN_ROI
@@ -516,6 +530,13 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
     detected = False
     armed = False
     detected_elapsed_ms = None
+    # movement stop: off screen (last pre-roll frame), previous frame, current still streak
+    off_small = screen_small(pre_frames[-1][1]) if pre_frames else None
+    previous_small = None
+    still_start = None              # (elapsed_ms, frame) of the first frame of the current still streak
+    settled_elapsed_ms = None
+    settle_frames = max(1, int(round(SETTLE_SECONDS * 30)))
+    still_count = 0
     frame_writer = FrameWriter(os.path.join(output_dir, "frames"))
 
     # Pre-roll: the last PRE_ROLL_SECONDS before Power ON, saved with negative elapsed time for the video.
@@ -558,14 +579,35 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 detected = True
                 detected_elapsed_ms = elapsed_ms
 
+            current_small = screen_small(frame)
+            if off_small is None:
+                off_small = current_small
+            movement = float(np.mean(np.abs(current_small - previous_small))) if previous_small is not None else 0.0
+            previous_small = current_small
+            screen_on = float(np.mean(np.abs(current_small - off_small))) >= SETTLE_ON_CHANGE
+            newly_settled = False
+            if settled_elapsed_ms is None:
+                if screen_on and movement < SETTLE_STILL_DIFF and score >= SETTLE_HOME_LIKE * similarity_threshold:
+                    if still_count == 0:
+                        still_start = (elapsed_ms, frame.copy())
+                    still_count += 1
+                    if still_count >= settle_frames:
+                        settled_elapsed_ms = still_start[0]
+                        newly_settled = True
+                else:
+                    still_count = 0
+
             # Saved frames show this frame's own elapsed time from Power ON and its similarity.
             saved_color = (0, 255, 0) if score >= similarity_threshold else (0, 255, 255)
             saved_overlay = [
                 (f"RUN {run_idx}  #{frame_count}  TIMER {elapsed_ms / 1000.0:.3f} s", saved_color, 1.4),
                 (f"Similarity {score:.3f} / {similarity_threshold:.3f}", saved_color, 1.0),
+                (f"Movement {movement:.1f} / {SETTLE_STILL_DIFF:.1f}", (255, 255, 255), 0.8),
             ]
             if detected:
                 saved_overlay.append((f"HOME DETECTED at {detected_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+            if settled_elapsed_ms is not None:
+                saved_overlay.append((f"MOVEMENT STOPPED at {settled_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
             frame_writer.save(
                 f"frame_{frame_count:05d}_{elapsed_ms:09.1f}ms_sim{score:.3f}.jpg",
                 draw_overlay(frame.copy(), saved_overlay),
@@ -579,7 +621,8 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
             ]
             if detected:
                 overlay.append(("HOME DETECTED", (0, 255, 0), 1.2))
-                overlay.append((f"Saving frames until {FRAME_CAPTURE_SIMILARITY:.2f}...", (255, 255, 255), 0.8))
+            if settled_elapsed_ms is not None:
+                overlay.append((f"MOVEMENT STOPPED at {settled_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
             draw_overlay(frame, overlay)
             cv2.imshow(CAPTURE_WINDOW, frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -594,9 +637,22 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
                 winsound.Beep(1500, 250)
                 winsound.Beep(2500, 350)
 
-            if detected and score >= FRAME_CAPTURE_SIMILARITY:
-                print(f"[RUN {run_idx}] Similarity {score:.3f} reached {FRAME_CAPTURE_SIMILARITY:.2f}; "
-                      f"frame capture stopped at {elapsed_ms:.2f} ms.")
+            if newly_settled:
+                settled_image = draw_overlay(still_start[1], [
+                    (f"RUN {run_idx}  MOVEMENT STOPPED  {settled_elapsed_ms / 1000.0:.3f} s", (0, 255, 0), 1.4),
+                    (f"Still for {SETTLE_SECONDS:g} s from this frame", (0, 255, 0), 1.0)])
+                cv2.imwrite(os.path.join(output_dir, "RESULT_SETTLED.jpg"), settled_image)
+                print(f"[RUN {run_idx}] Movement stopped at {settled_elapsed_ms:.2f} ms "
+                      f"(still for {SETTLE_SECONDS:g} s).")
+
+            # Stop once both are measured, or the settle did not come within SETTLE_EXTRA_SECONDS of Home.
+            if detected and settled_elapsed_ms is not None and (score >= FRAME_CAPTURE_SIMILARITY
+                                                                or elapsed_ms >= settled_elapsed_ms + 500):
+                print(f"[RUN {run_idx}] Both measured; frame capture stopped at {elapsed_ms:.2f} ms.")
+                break
+            if detected and elapsed_ms - detected_elapsed_ms > SETTLE_EXTRA_SECONDS * 1000.0:
+                print(f"[RUN {run_idx}] The screen kept moving for {SETTLE_EXTRA_SECONDS:g} s after Home; "
+                      "no movement-stop time for this run.")
                 break
     finally:
         frame_writer.close()
@@ -614,6 +670,7 @@ def measure_home_time(frame_capture, reference, run_idx, output_dir, timeout,
         'run': run_idx,
         'status': 'PASS' if detected else 'FAIL',
         'response_time_ms': last_elapsed_ms,
+        'settle_time_ms': settled_elapsed_ms,
         'frame_count': frame_count,
         'directory': output_dir,
     }
@@ -709,7 +766,9 @@ def main():
                 frame_capture.stop()
 
             if result['status'] != 'INVALID':
+                ends = [t for t in (result['response_time_ms'], result.get('settle_time_ms')) if t is not None]
                 make_run_videos(output_dir, threshold=configuration['home_similarity_threshold'],
+                                end_ms=max(ends) if result['status'] == 'PASS' and ends else None,
                                 run_label=f"RUN {run_idx}")
 
             results.append(result)
@@ -720,6 +779,9 @@ def main():
                 'Standby_Seconds': configuration['standby_seconds'],
                 'Home_Time_ms': (
                     round(result['response_time_ms'], 2) if result['response_time_ms'] is not None else None
+                ),
+                'Settle_Time_ms': (
+                    round(result['settle_time_ms'], 2) if result.get('settle_time_ms') is not None else None
                 ),
                 'Frames': result['frame_count'],
                 'Status': result['status'],
@@ -743,6 +805,7 @@ def main():
                 'Standby_Seconds': configuration['standby_seconds'],
                 'Similarity_Threshold': configuration['home_similarity_threshold'],
                 'Home_Time_ms': row['Home_Time_ms'],
+                'Settle_Time_ms': row['Settle_Time_ms'],
                 'Frames': row['Frames'],
                 'Status': row['Status'],
             })
