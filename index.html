@@ -182,7 +182,7 @@
 
   <div class="grid2">
     <div class="panel">
-      <h2>Measurements (in order)</h2>
+      <h2>Measurements by run</h2>
       <div class="chart" id="trend"></div>
       <div class="legend" id="legend"></div>
     </div>
@@ -197,7 +197,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b14</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b15</p>
 </div>
 
 <dialog id="player">
@@ -514,34 +514,42 @@ function renderTrend(rows, metric, outliers) {
 
   const builds = [...new Set(points.map(p => groupKey(p.r)))];
   const color = b => cssVar(SERIES_COLORS[builds.indexOf(b) % SERIES_COLORS.length]);
+  // All series on one chart: x = the run's position within its own series (1st, 2nd, ...), so series overlap
+  // and can be compared run by run. The dashed line is each series' average.
+  const series = builds.map(b => points.filter(p => groupKey(p.r) === b));
+  const maxN = Math.max(...series.map(list => list.length));
   // Draw at the panel's own width so the chart never needs a horizontal scrollbar.
-  const W = Math.max(280, Math.floor(box.clientWidth) || 640), H = 260, L = 56, R = 14, T = 12, B = 28;
+  const W = Math.max(280, Math.floor(box.clientWidth) || 640), H = 260, L = 56, R = 14, T = 12, B = 34;
   const maxV = Math.max(...points.map(p => p.v)) * 1.1 || 1;
-  const x = i => L + (points.length === 1 ? (W - L - R) / 2 : (i / (points.length - 1)) * (W - L - R));
+  const x = k => L + (maxN === 1 ? (W - L - R) / 2 : (k / (maxN - 1)) * (W - L - R));
   const y = v => T + (1 - v / maxV) * (H - T - B);
 
-  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Measurement trend">`;
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Measurements by run">`;
   for (let k = 0; k <= 4; k++) {
     const v = (maxV / 4) * k, yy = y(v);
     svg += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="${cssVar('--line')}"/>`;
     svg += `<text x="${L - 6}" y="${yy + 4}" text-anchor="end">${fmt(v)}</text>`;
   }
-  svg += `<text x="${L}" y="${H - 6}">oldest</text><text x="${W - R}" y="${H - 6}" text-anchor="end">latest</text>`;
-  builds.forEach(b => {
-    const series = points.map((p, idx) => ({ ...p, idx })).filter(p => groupKey(p.r) === b);
-    const path = series.map((p, k) => `${k ? 'L' : 'M'}${x(p.idx)},${y(p.v)}`).join(' ');
-    svg += `<path d="${path}" fill="none" stroke="${color(b)}" stroke-width="1.5" opacity="0.5"/>`;
-    series.forEach(p => {
+  const every = Math.ceil(maxN / Math.max(1, Math.floor((W - L - R) / 28)));
+  for (let k = 0; k < maxN; k += every) svg += `<text x="${x(k)}" y="${H - 18}" text-anchor="middle">${k + 1}</text>`;
+  svg += `<text x="${(L + W - R) / 2}" y="${H - 3}" text-anchor="middle">Run</text>`;
+  builds.forEach((b, i) => {
+    const list = series[i];
+    const mean = list.filter(p => p.r.Status === 'PASS').reduce((a, p, _, all) => a + p.v / all.length, 0);
+    if (mean) svg += `<line x1="${L}" x2="${W - R}" y1="${y(mean)}" y2="${y(mean)}" stroke="${color(b)}" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.8"><title>${esc(b)} average ${fmt(mean)} ms</title></line>`;
+    const path = list.map((p, k) => `${k ? 'L' : 'M'}${x(k)},${y(p.v)}`).join(' ');
+    svg += `<path d="${path}" fill="none" stroke="${color(b)}" stroke-width="1.5" opacity="0.6"/>`;
+    list.forEach((p, k) => {
       const fail = p.r.Status === 'FAIL', odd = outliers.has(p.r);
       const title = `${esc(b)}\nRun ${esc(p.r.Run)} · ${esc(p.r.Timestamp)}\n${fmt(p.v, 2)} ms${fail ? ' (FAIL)' : ''}${odd ? ' (outlier?)' : ''}`;
       svg += fail
-        ? `<g><title>${title}</title><path d="M${x(p.idx) - 4},${y(p.v) - 4}l8,8m0,-8l-8,8" stroke="${cssVar('--fail')}" stroke-width="2" fill="none"/></g>`
-        : `<circle cx="${x(p.idx)}" cy="${y(p.v)}" r="4" fill="${color(b)}"${odd ? ` stroke="${cssVar('--warn')}" stroke-width="3"` : ''}><title>${title}</title></circle>`;
+        ? `<g><title>${title}</title><path d="M${x(k) - 4},${y(p.v) - 4}l8,8m0,-8l-8,8" stroke="${cssVar('--fail')}" stroke-width="2" fill="none"/></g>`
+        : `<circle cx="${x(k)}" cy="${y(p.v)}" r="4" fill="${color(b)}"${odd ? ` stroke="${cssVar('--warn')}" stroke-width="3"` : ''}><title>${title}</title></circle>`;
     });
   });
   box.innerHTML = svg + '</svg>';
   legend.innerHTML = builds.map(b => `<span><i style="background:${color(b)}"></i>${esc(b)}</span>`).join('') +
-    `<span style="color:var(--fail)">✕ FAIL</span><span style="color:var(--warn)">◯ outlier?</span><span class="muted">Excluded rows are not plotted</span>`;
+    `<span style="color:var(--fail)">✕ FAIL</span><span style="color:var(--warn)">◯ outlier?</span><span class="muted">- - - average · Excluded rows are not plotted</span>`;
 }
 
 function renderBuilds(statRows, metric) {
