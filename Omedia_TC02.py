@@ -91,6 +91,7 @@ LANDING_STEP = 15               # change of the area when the picture lands (loa
 QUIET_FRAMES = 9                # ~0.3 s without change after the GUIDE closed = loading screen
 PERSIST_SECONDS = 0.5           # the landed picture must stay different from the loading screen this long
 NO_GUIDE_CHANGE_MS = 3000       # if the area never changed when the GUIDE closed, start waiting anyway
+LOADING_DARK = 60               # area brightness below this = the old picture went black (loading screen)
 ONSET_STEP = 8                  # the landing time is the first frame that moved this far from the loading screen
 STEP_LOAD_SECONDS = 6           # saved navigation: wait after each OK for the next screen to load
 HOME_SETTLE_SECONDS = 3
@@ -686,24 +687,6 @@ def calibrate_playback(configuration, camera, calibration_dir):
     return roi, threshold
 
 
-def confirm_live_tv_ready(camera):
-    """Before the first channel change: the user confirms Live TV is playing (ENTER) or cancels (Q)."""
-    print("[READY] Is Live TV playing and ready for the first channel change? "
-          "Press ENTER in the camera window to start, Q to cancel.")
-    while True:
-        frame = read_frame(camera)
-        if frame is not None:
-            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [
-                ("Is Live TV playing and ready?", (0, 255, 255), 1.0),
-                ("ENTER = start measuring,  Q = cancel", (255, 255, 255), 0.8)]))
-        key = cv2.waitKey(30) & 0xFF
-        if key in (13, 10):
-            print("[READY] Confirmed; starting the measurement.")
-            return
-        if key in (ord('q'), ord('Q')):
-            raise KeyboardInterrupt("Canceled before the first channel change.")
-
-
 def show_for(camera, seconds, label):
     end = time.perf_counter() + seconds
     while time.perf_counter() < end:
@@ -1036,6 +1019,11 @@ def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_presse
                         quiet += 1
                         if quiet >= QUIET_FRAMES:
                             phase = 'loading'
+                elif (reference is not None and current.mean() < LOADING_DARK
+                      and current.mean() < reference.mean() - ARM_STEP):
+                    # The old picture is going black (e.g. Hisense after CH+/-): that is the loading screen
+                    # starting, not the new picture. Forget the old picture and wait for the landing from here.
+                    history, candidate = [(elapsed_ms, current)], None
                 elif candidate is None:
                     if step >= LANDING_STEP:
                         # The change started at the first frame since the reference that moved away from it.
@@ -1248,7 +1236,6 @@ def main():
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
 
-        confirm_live_tv_ready(camera)
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
