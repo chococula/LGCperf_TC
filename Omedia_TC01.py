@@ -28,7 +28,7 @@ DEFAULT_CONFIGURATION = {
     'num_runs': 5,
     'timeout': 180.0,
     'home_similarity_threshold': 0.7,
-    'standby_seconds': 20,       # wait with the TV off before Power ON (type 300 for the 5-minute standby)
+    'standby_seconds': 300,      # wait with the TV off before Power ON
     'screen_rois': {},           # per SoC: [x, y, w, h] of the TV screen in the camera view
 }
 
