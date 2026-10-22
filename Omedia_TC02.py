@@ -686,6 +686,24 @@ def calibrate_playback(configuration, camera, calibration_dir):
     return roi, threshold
 
 
+def confirm_live_tv_ready(camera):
+    """Before the first channel change: the user confirms Live TV is playing (ENTER) or cancels (Q)."""
+    print("[READY] Is Live TV playing and ready for the first channel change? "
+          "Press ENTER in the camera window to start, Q to cancel.")
+    while True:
+        frame = read_frame(camera)
+        if frame is not None:
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [
+                ("Is Live TV playing and ready?", (0, 255, 255), 1.0),
+                ("ENTER = start measuring,  Q = cancel", (255, 255, 255), 0.8)]))
+        key = cv2.waitKey(30) & 0xFF
+        if key in (13, 10):
+            print("[READY] Confirmed; starting the measurement.")
+            return
+        if key in (ord('q'), ord('Q')):
+            raise KeyboardInterrupt("Canceled before the first channel change.")
+
+
 def show_for(camera, seconds, label):
     end = time.perf_counter() + seconds
     while time.perf_counter() < end:
@@ -1230,6 +1248,7 @@ def main():
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
 
+        confirm_live_tv_ready(camera)
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
