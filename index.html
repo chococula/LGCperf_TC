@@ -141,7 +141,7 @@
   <header>
     <div>
       <h1>US R&amp;D OMDIA Perf Result</h1>
-      <p class="definition">Time from the Power ON IR send until the camera frame reaches the Home similarity threshold (<code>TM_CCOEFF_NORMED</code>).</p>
+      <p class="definition" id="definition"></p>
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
       <span id="updated"><span class="status-dot"></span>Loading…</span>
@@ -189,7 +189,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b11</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b12</p>
 </div>
 
 <dialog id="player">
@@ -213,6 +213,14 @@ const API_URL = !IN_APPS_SCRIPT && window.LGCPERF_API_URL && !/XXXX/.test(window
 const LIVE = IN_APPS_SCRIPT || !!API_URL;
 // Without the Google Sheet, show the CSV the data editor has open in this browser (same site, shared storage).
 const SHARED_KEY = 'lgcperf-local-data';
+// What each TC measures, shown under the title for the selected tab.
+const TC_DEFINITIONS = {
+  Omedia_TC01: 'Home screen wake time: from the Power ON IR send until the camera frame reaches the Home similarity threshold (<code>TM_CCOEFF_NORMED</code>).',
+  Omedia_TC02: 'Samsung TV Plus Live TV channel change: from the OK on the next channel in the GUIDE until the full-screen picture lands (an area that is empty while loading gets filled).',
+};
+function renderDefinition() {
+  document.getElementById('definition').innerHTML = TC_DEFINITIONS[state.tc] || '';
+}
 function sharedLocal() {
   try { const value = JSON.parse(localStorage.getItem(SHARED_KEY)); return value && value.data ? value : null; } catch (e) { return null; }
 }
@@ -374,6 +382,7 @@ function setExcluded(row, excluded, reason) {
 
 // ---------- filters ----------
 function renderTabs(tcs) {
+  renderDefinition();
   const box = document.getElementById('tabs');
   box.innerHTML = tcs.map(tc =>
     `<button class="tab ${tc === state.tc ? 'active' : ''}" data-tc="${esc(tc)}">${esc(tc)}<span class="muted">${state.data[tc].length}</span></button>`
