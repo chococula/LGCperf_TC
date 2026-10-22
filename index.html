@@ -165,6 +165,7 @@
     </div>
     <label>Session<select id="f-Session"></select></label>
     <label>TV maker<select id="f-Manufacturer"></select></label>
+    <label>Service<select id="f-Service"></select></label>
     <label>SoC<select id="f-SoC"></select></label>
     <label>SW Version<select id="f-SWV"></select></label>
     <label>LG CV Version<select id="f-LGCV"></select></label>
@@ -196,7 +197,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b13</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b14</p>
 </div>
 
 <dialog id="player">
@@ -209,7 +210,7 @@
 
 <script>
 const REFRESH_MS = 30000;
-const FILTER_KEYS = ['Session', 'Manufacturer', 'SoC', 'SWV', 'LGCV', 'Status'];
+const FILTER_KEYS = ['Session', 'Manufacturer', 'Service', 'SoC', 'SWV', 'LGCV', 'Status'];
 const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
@@ -247,7 +248,7 @@ function buildKey(r) {
 }
 // Series for the charts: the build (with its TV maker), or only the TV maker when comparing makers.
 function groupKey(r) {
-  const maker = r.Manufacturer || '';
+  const maker = [r.Manufacturer, r.Service].filter(Boolean).join(' · ');
   if (document.getElementById('compare').value === 'maker') return maker || 'Unknown maker';
   return maker ? `${maker} · ${buildKey(r)}` : buildKey(r);
 }
@@ -595,7 +596,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
   document.getElementById('row-count').textContent = `(${rows.length} shown · ${excludedCount} excluded)`;
   if (!rows.length) { table.innerHTML = '<tr><td class="empty">No runs in this range</td></tr>'; return; }
 
-  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Recording', 'Session', 'SoC', 'SWV', 'LGCV', 'Manufacturer'];
+  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Recording', 'Session', 'Manufacturer', 'Service', 'SoC', 'SWV', 'LGCV'];
   const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k));
   if (rows.some(r => r.Video || r.GIF)) keys.push('Recording');
   const columns = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
