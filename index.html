@@ -197,7 +197,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b16</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b17</p>
 </div>
 
 <dialog id="player">
@@ -436,7 +436,7 @@ function renderFilters() {
   });
 
   const metricSelect = document.getElementById('metric');
-  const metrics = rows.length ? Object.keys(rows[0]).filter(k => /_ms$/i.test(k)) : [];
+  const metrics = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => /_ms$/i.test(k));
   if (!metrics.includes(state.metric)) state.metric = metrics[0] || null;
   metricSelect.innerHTML = metrics.map(m => `<option>${esc(m)}</option>`).join('');
   metricSelect.value = state.metric || '';
