@@ -1,7 +1,7 @@
 """Omedia_TC03 - YouTube app launch time after an AC power cycle.
 
 Each run:
-  1. AC OFF (10 s) -> AC ON (TP-Link smart plug).
+  1. AC OFF (10 s) -> AC ON (TP-Link smart plug; its IP is confirmed by connecting at every start).
   2. Wait until the camera sees the Home screen, then stay on Home for 30 s.
   3. Move to YouTube with the saved keys (planned like PACE: shown on screen first), OK starts the timer.
   4. Stop when the app lands: an area that is empty while YouTube loads gets filled.
@@ -70,6 +70,8 @@ NO_GUIDE_CHANGE_MS = 3000      # if the area never changed when Home disappeared
 ONSET_STEP = 8                 # the landing time is the first frame that moved this far from the loading screen
 STREAM_EXTRA_SECONDS = 1.0     # keep saving frames this long after the landing is confirmed
 HOME_SETTLE_SECONDS = 3
+PLUG_TIMEOUT_SECONDS = 8       # connecting to the smart plug
+PLUG_DISCOVERY_SECONDS = 5     # searching the network for smart plugs
 KEY_GAP_SECONDS = 0.5
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC03_response.csv")
 
@@ -90,7 +92,6 @@ def get_user_configuration():
     SoC = input(f"Enter SoC Model (default: {defaults['SoC']}): ").strip() or defaults['SoC']
     SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
-    plug_ip = input(f"Enter smart plug IP (default: {defaults['plug_ip']}): ").strip() or defaults['plug_ip']
     num_runs = ask_number("Enter number of runs", defaults['num_runs'], int, lambda v: v > 0)
     timeout = ask_number("Enter launch timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
     ac_off_seconds = ask_number("Enter AC OFF seconds", defaults['ac_off_seconds'], int, lambda v: v > 0)
@@ -99,12 +100,12 @@ def get_user_configuration():
 
     configuration = dict(defaults)
     configuration.update({
-        'manufacturer': manufacturer, 'SoC': SoC, 'SWV': SWV, 'LGCV': LGCV, 'plug_ip': plug_ip,
+        'manufacturer': manufacturer, 'SoC': SoC, 'SWV': SWV, 'LGCV': LGCV,
         'num_runs': num_runs, 'timeout': timeout, 'ac_off_seconds': ac_off_seconds,
         'home_wait_seconds': home_wait_seconds,
     })
     print("\nConfiguration:")
-    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'plug_ip', 'num_runs', 'timeout',
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout',
                 'ac_off_seconds', 'home_wait_seconds'):
         print(f"  {key}: {configuration[key]}")
     if input("Confirm and proceed? (Y/n): ").strip().lower() == 'n':
@@ -638,6 +639,64 @@ def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_presse
 
 # ---------- AC power and Home ----------
 
+async def _plug_info(ip):
+    plug = await asyncio.wait_for(kasa.Device.connect(host=ip), PLUG_TIMEOUT_SECONDS)
+    try:
+        return plug.alias, plug.model, plug.is_on
+    finally:
+        await plug.disconnect()
+
+
+async def _discover_plugs():
+    found = await kasa.Discover.discover(discovery_timeout=PLUG_DISCOVERY_SECONDS)
+    plugs = []
+    for ip, device in found.items():
+        try:
+            await device.update()
+            plugs.append((ip, device.alias, device.model, device.is_on))
+        except Exception:
+            plugs.append((ip, '?', '?', None))
+        finally:
+            await device.disconnect()
+    return sorted(plugs)
+
+
+def confirm_plug(configuration):
+    """Every run of TC03: confirm the smart plug IP by connecting to it (or pick one found on the network)."""
+    ip = configuration['plug_ip']
+    print("\n" + "-" * 60)
+    print("  Smart plug (AC power) check")
+    print("-" * 60)
+    ip = input(f"Smart plug IP (default: {ip}): ").strip() or ip
+    while True:
+        try:
+            alias, model, is_on = asyncio.run(_plug_info(ip))
+            print(f"[PLUG] {ip}: '{alias}' ({model}), currently {'ON' if is_on else 'OFF'}")
+            if input("Is this the plug the TV is connected to? (Y/n): ").strip().lower() in ('', 'y', 'yes'):
+                break
+        except Exception as error:
+            print(f"[PLUG] Could not connect to {ip}: {error}")
+        print("[PLUG] Searching the network for smart plugs...")
+        try:
+            plugs = asyncio.run(_discover_plugs())
+        except Exception as error:
+            plugs = []
+            print(f"[PLUG] Search failed: {error}")
+        for number, (found_ip, alias, model, is_on) in enumerate(plugs, 1):
+            state = 'ON' if is_on else 'OFF' if is_on is not None else '?'
+            print(f"  {number}) {found_ip}  '{alias}' ({model}) {state}")
+        if not plugs:
+            print("  (none found - type the IP again)")
+        choice = input("Pick a number, or type an IP: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(plugs):
+            ip = plugs[int(choice) - 1][0]
+        elif choice:
+            ip = choice
+    configuration['plug_ip'] = ip
+    save_configuration(CONFIG_FILE, configuration)
+    print(f"[PLUG] Using {ip}")
+
+
 async def _ac_cycle(ip, off_seconds):
     plug = await kasa.Device.connect(host=ip)
     try:
@@ -795,6 +854,7 @@ def launch_once(configuration, camera, run_idx, output_dir, navigation, home_ref
 
 def main():
     configuration = get_user_configuration()
+    confirm_plug(configuration)
     camera = None
 
     try:
