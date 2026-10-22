@@ -4,3 +4,4 @@ __pycache__/
 result_upload_config.json
 result_upload_pending.jsonl
 samsung_tv_token.txt
+ir_capture_*_raw.log
