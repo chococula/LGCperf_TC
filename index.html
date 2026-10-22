@@ -224,7 +224,7 @@ const SHARED_KEY = 'lgcperf-local-data';
 // What each TC measures, shown under the title for the selected tab.
 const TC_DEFINITIONS = {
   Omedia_TC01: 'Home screen wake time: from the Power ON IR send until the camera frame reaches the Home similarity threshold (<code>TM_CCOEFF_NORMED</code>).',
-  Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA: IR CH+/CH-) until the full-screen picture lands (an area that is empty while loading gets filled).',
+  Omedia_TC02: 'Samsung TV Plus Live TV channel change: from the OK on the next channel in the GUIDE until the full-screen picture lands (an area that is empty while loading gets filled).',
 };
 function renderDefinition() {
   document.getElementById('definition').innerHTML = TC_DEFINITIONS[state.tc] || '';
