@@ -1,5 +1,5 @@
 {
- "publishedAt": "2026-10-22T18:28:07+00:00",
+ "publishedAt": "2026-10-22T18:45:35+00:00",
  "data": {
   "Omedia_TC01": [
    {
@@ -143,6 +143,76 @@
     "GIF": "media/Omedia_TC02_05_20261021_165733_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung",
     "Service": "Samsung TV Plus"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "1",
+    "Timestamp": "20261022_114029",
+    "Zap_Time_ms": "3580.44",
+    "Frames": "153",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_01_20261022_114029_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Service": "TV Channel",
+    "Row_ID": "pub-tc02-hisense-tvch-1140-1",
+    "Video": "media/Omedia_TC02_01_20261022_114029_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC02_01_20261022_114029_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "2",
+    "Timestamp": "20261022_114048",
+    "Zap_Time_ms": "4302.51",
+    "Frames": "175",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_02_20261022_114048_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Service": "TV Channel",
+    "Row_ID": "pub-tc02-hisense-tvch-1140-2",
+    "Video": "media/Omedia_TC02_02_20261022_114048_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC02_02_20261022_114048_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "3",
+    "Timestamp": "20261022_114107",
+    "Zap_Time_ms": "1692.01",
+    "Frames": "97",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_03_20261022_114107_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Service": "TV Channel",
+    "Row_ID": "pub-tc02-hisense-tvch-1140-3",
+    "Video": "media/Omedia_TC02_03_20261022_114107_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC02_03_20261022_114107_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "4",
+    "Timestamp": "20261022_114122",
+    "Zap_Time_ms": "6908.05",
+    "Frames": "253",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_04_20261022_114122_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Service": "TV Channel",
+    "Row_ID": "pub-tc02-hisense-tvch-1140-4",
+    "Video": "media/Omedia_TC02_04_20261022_114122_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC02_04_20261022_114122_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "5",
+    "Timestamp": "20261022_114145",
+    "Zap_Time_ms": "1996.53",
+    "Frames": "106",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_05_20261022_114145_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Service": "TV Channel",
+    "Row_ID": "pub-tc02-hisense-tvch-1140-5",
+    "Video": "media/Omedia_TC02_05_20261022_114145_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC02_05_20261022_114145_43A6GV_SWV0015.09.09_LGCV001.gif"
    }
   ]
  }
