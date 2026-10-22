@@ -6,3 +6,4 @@ python-kasa
 keyboard
 imageio-ffmpeg
 samsungtvws
+pywinpty

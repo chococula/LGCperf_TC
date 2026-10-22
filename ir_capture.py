@@ -10,7 +10,6 @@ import json
 import os
 import queue
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -18,12 +17,14 @@ import winsound
 
 import cv2
 import numpy as np
+from winpty import PtyProcess
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MIN_PULSES = 16            # a real key frame has at least this many timings (NEC repeat frames have 3-4)
 FRAME_GAP_SECONDS = 0.25   # timings arriving closer than this belong to the same button press
 MATCH_TOLERANCE = 0.25     # two presses match when every timing is within 25%
+ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')   # console control codes in the output
 MAX_TIMING_US = 20000      # longer marks/spaces are idle gaps between presses (frame separators)
 
 # The keys the TCs already use (same names as LG_KEYS / ROKU_KEYS / SAMSUNG_KEYS in ir_keys.py).
@@ -40,36 +41,91 @@ class FlircReceiver:
     def __init__(self, raw_log_path):
         self.frames = queue.Queue()
         self.activity = None        # {'at': perf_counter, 'pulses': n, 'kind': 'key' | 'noise'}
+        self.status = 'connecting'  # 'listening' | 'connecting' | an error message shown on screen
         self.raw_log = open(raw_log_path, 'a', encoding='utf-8')
-        self.process = subprocess.Popen([FLIRC_UTIL_PATH, 'device_log', '-i', '-p'], stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, text=True, bufsize=1)
-        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.process = None
+        self.stopped = False
+        self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
-    def _read(self):
-        """The IR debug log prints '+mark -space ...' in microseconds; a long idle shows up as one large
-        value (e.g. -14139000), which separates button presses."""
-        pending, last_at = [], 0.0
-        for line in self.process.stdout:
-            self.raw_log.write(line)
-            self.raw_log.flush()
-            tokens = re.findall(r'[+-]\d+', line)
-            if not tokens:
+    def _run(self):
+        """Keep `flirc_util device_log` running in a pseudo console (piped output would be held back in a
+        buffer, so presses would not show up); if it fails or the device drops, report it and restart."""
+        while not self.stopped:
+            try:
+                self.process = PtyProcess.spawn([FLIRC_UTIL_PATH, 'device_log', '-i', '-p'])
+            except Exception as error:
+                self.status = f"cannot start flirc_util: {error}"
+                time.sleep(2)
                 continue
-            now = time.perf_counter()
-            if pending and now - last_at > FRAME_GAP_SECONDS:
+            self._read()
+            if self.stopped:
+                return
+            if self.status == 'listening':
+                self.status = 'Flirc stopped responding'
+            time.sleep(1.0)
+
+    def _chunks(self):
+        """Raw output pieces from the console, via a thread (reads block)."""
+        pieces = queue.Queue()
+
+        def pump():
+            try:
+                while True:
+                    data = self.process.read(4096)
+                    if data:
+                        pieces.put(data)
+            except Exception:
+                pieces.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        return pieces
+
+    def _read(self):
+        """The IR debug log prints '+mark -space ...' in microseconds. A press is complete when a long idle
+        value appears (e.g. -14139000, printed when the next press starts) or the output goes quiet."""
+        pieces = self._chunks()
+        text, pending, last_at = '', [], time.perf_counter()
+        while not self.stopped:
+            try:
+                data = pieces.get(timeout=0.05)
+            except queue.Empty:
+                data = ''
+            if data is None:                       # the process ended
+                break
+            if data:
+                text += ANSI_ESCAPE.sub('', data)
+                last_at = time.perf_counter()
+            lines = text.split('\n')
+            quiet = time.perf_counter() - last_at > FRAME_GAP_SECONDS
+            text = '' if quiet else lines.pop()    # keep an unfinished line unless the output went quiet
+            for line in lines:
+                pending = self._handle_line(line, pending)
+            if quiet and pending:
                 self._flush(pending)
                 pending = []
-            last_at = now
-            for token in tokens:
-                value = abs(int(token))
-                if value > MAX_TIMING_US:          # idle gap: the previous press is complete
-                    self._flush(pending)
-                    pending = []
-                else:
-                    pending.append(value)
         if pending:
             self._flush(pending)
+
+    def _handle_line(self, line, pending):
+        if not line.strip():
+            return pending
+        self.raw_log.write(line.rstrip('\r') + '\n')
+        self.raw_log.flush()
+        lowered = line.lower()
+        if 'persistance mode' in lowered or 'persistence mode' in lowered:
+            self.status = 'listening'
+        elif 'disconnected' in lowered or 'error' in lowered or line.lstrip().startswith('[E]'):
+            self.status = 'Flirc not responding (' + line.strip()[:60] + ')'
+            return pending
+        for token in re.findall(r'[+-]\d+', line):
+            value = abs(int(token))
+            if value > MAX_TIMING_US:              # idle gap: the previous press is complete
+                self._flush(pending)
+                pending = []
+            else:
+                pending.append(value)
+        return pending
 
     def _flush(self, timings):
         if not timings:
@@ -95,7 +151,12 @@ class FlircReceiver:
         return frame
 
     def close(self):
-        self.process.terminate()
+        self.stopped = True
+        if self.process is not None:
+            try:
+                self.process.terminate(force=True)
+            except Exception:
+                pass
         self.raw_log.close()
 
 
@@ -134,7 +195,7 @@ WINDOW = "IR capture"
 GREEN, ORANGE, WHITE, GRAY, YELLOW, RED = (80, 220, 80), (0, 165, 255), (240, 240, 240), (150, 150, 150), (0, 230, 255), (80, 80, 255)
 
 
-def draw_screen(brand, index, label, step, message, message_color, activity, keys, skipped):
+def draw_screen(brand, index, label, step, message, message_color, activity, keys, skipped, status='listening'):
     canvas = np.full((600, 1000, 3), 32, np.uint8)
     now = time.perf_counter()
     if activity and now - activity['at'] < 0.6:                 # flash the border on any IR signal
@@ -143,6 +204,15 @@ def draw_screen(brand, index, label, step, message, message_color, activity, key
         text = (f"IR received: {activity['pulses']} pulses" if activity['kind'] == 'key'
                 else f"IR weak / noise: {activity['pulses']} pulses - point the remote at the Flirc")
         cv2.putText(canvas, text, (40, 290), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2, cv2.LINE_AA)
+    if status == 'listening':
+        cv2.putText(canvas, "Flirc: listening", (720, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, GREEN, 2, cv2.LINE_AA)
+    else:                                                       # the receiver is not working: say so loudly
+        cv2.rectangle(canvas, (0, 245), (999, 395), (40, 40, 140), -1)
+        cv2.putText(canvas, "Flirc is not receiving - reconnecting...", (40, 300),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, WHITE, 3, cv2.LINE_AA)
+        cv2.putText(canvas, "If this stays: unplug and re-plug the Flirc USB, close the Flirc app.", (40, 345),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, WHITE, 2, cv2.LINE_AA)
+        cv2.putText(canvas, status[:80], (40, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.55, WHITE, 1, cv2.LINE_AA)
     cv2.putText(canvas, f"{brand} remote  -  key {index}/{len(KEYMAP)}", (40, 60),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, GRAY, 2, cv2.LINE_AA)
     cv2.putText(canvas, f"Press:  {label}", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 2.0, WHITE, 4, cv2.LINE_AA)
@@ -185,7 +255,8 @@ def main():
                 step = "Press it once" + (" (already captured: press to replace, S keeps it)" if key in keys else "")
             else:
                 step = "Got it - press the SAME button again to confirm"
-            draw_screen(brand, index + 1, label, step, message, message_color, receiver.activity, keys, skipped)
+            draw_screen(brand, index + 1, label, step, message, message_color, receiver.activity, keys, skipped,
+                        receiver.status)
             pressed = cv2.waitKey(30) & 0xFF
             if pressed in (ord('q'), ord('Q'), 27):
                 break
