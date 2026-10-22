@@ -58,6 +58,8 @@ DEFAULT_CONFIGURATION = {
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
+FLIRC_IDLE_WAKE_SECONDS = 20    # the Flirc sleeps when idle: after this long without traffic, wake it first
+LAST_FLIRC_AT = 0.0
 RAW_IR_KEYSETS = {
     'LG': LG_KEYS,
     'Roku': ROKU_KEYS,
@@ -286,13 +288,31 @@ def draw_overlay(frame, lines):
     return frame
 
 
+def wake_flirc():
+    """Talk to the Flirc without sending IR (`flirc_util version`, ~2.5 s) so it is awake for the next send."""
+    global LAST_FLIRC_AT
+    try:
+        subprocess.run([FLIRC_UTIL_PATH, 'version'], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"[FLIRC] Wake-up call failed: {error}")
+    LAST_FLIRC_AT = time.perf_counter()
+
+
+def wake_flirc_if_idle():
+    if time.perf_counter() - LAST_FLIRC_AT >= FLIRC_IDLE_WAKE_SECONDS:
+        print("[FLIRC] Idle for a while; waking it up first (no IR).")
+        wake_flirc()
+
+
 def send_key(key_name, manufacturer):
+    global LAST_FLIRC_AT
     if manufacturer not in RAW_IR_KEYSETS:
         raise ValueError(f"Unsupported IR key set: {manufacturer}")
     keyset = RAW_IR_KEYSETS[manufacturer]
     if key_name not in keyset:
         raise ValueError(f"{manufacturer} IR key is not configured: {key_name}")
 
+    wake_flirc_if_idle()
     print(f"Sending '{key_name}' via Flirc ({manufacturer} IR)...")
     action_started_at = time.perf_counter()
     subprocess.run(
@@ -301,6 +321,7 @@ def send_key(key_name, manufacturer):
         capture_output=True,
         text=True,
     )
+    LAST_FLIRC_AT = time.perf_counter()
     return action_started_at
 
 
@@ -1150,6 +1171,8 @@ def zap_by_ir(configuration, camera, run_idx, output_dir, roi, motion_threshold)
 
 
 def zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold):
+    if configuration['zap_method'] != 'Network':
+        wake_flirc_if_idle()             # before the pre-roll, so the timed key is never delayed by a wake-up
     zap = {'Network': zap_by_network, 'ChUp': zap_by_ir, 'Guide': zap_by_guide}[configuration['zap_method']]
     return zap(configuration, camera, run_idx, output_dir, roi, motion_threshold)
 
