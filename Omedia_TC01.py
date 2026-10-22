@@ -33,6 +33,9 @@ DEFAULT_CONFIGURATION = {
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
+FLIRC_KEEPALIVE_SECONDS = 30    # the Flirc sleeps when idle (sleep detection is always on): talk to it this often
+FLIRC_IDLE_WAKE_SECONDS = 20    # before a send after this long without Flirc traffic, wake it first
+LAST_FLIRC_AT = 0.0
 RAW_IR_KEYSETS = {
     'LG': LG_KEYS,
     'Roku': ROKU_KEYS,
@@ -294,14 +297,30 @@ def draw_overlay(frame, lines):
     return frame
 
 
+def wake_flirc():
+    """Talk to the Flirc without sending IR (`flirc_util version`, ~2.5 s) so it is awake for the next send."""
+    global LAST_FLIRC_AT
+    try:
+        subprocess.run([FLIRC_UTIL_PATH, 'version'], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"[FLIRC] Wake-up call failed: {error}")
+    LAST_FLIRC_AT = time.perf_counter()
+
+
 def wait_with_countdown(camera, seconds, run_idx):
     print(f"\nTV standby wait: {seconds} seconds")
     end_at = time.perf_counter() + seconds
     last_printed = None
+    keepalive = None
     while True:
         remaining = end_at - time.perf_counter()
         if remaining <= 0:
             break
+        # Keep the Flirc awake during long waits (in the background, so the camera view keeps running).
+        if (time.perf_counter() - LAST_FLIRC_AT >= FLIRC_KEEPALIVE_SECONDS
+                and (keepalive is None or not keepalive.is_alive())):
+            keepalive = threading.Thread(target=wake_flirc, daemon=True)
+            keepalive.start()
         if last_printed != int(remaining) + 1:
             last_printed = int(remaining) + 1
             print(f"  {last_printed} seconds remaining...", end="\r")
@@ -317,6 +336,8 @@ def wait_with_countdown(camera, seconds, run_idx):
             cv2.imshow(CAPTURE_WINDOW, frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             raise KeyboardInterrupt("Measurement canceled by user.")
+    if keepalive is not None:
+        keepalive.join()
     print(" " * 50, end="\r")
     print("Standby wait complete.")
 
@@ -328,6 +349,10 @@ def send_key(key_name, manufacturer):
     if key_name not in keyset:
         raise ValueError(f"{manufacturer} IR key is not configured: {key_name}")
 
+    global LAST_FLIRC_AT
+    if time.perf_counter() - LAST_FLIRC_AT >= FLIRC_IDLE_WAKE_SECONDS:
+        print("[FLIRC] Idle for a while; waking it up first (no IR).")
+        wake_flirc()
     print(f"Sending '{key_name}' via Flirc ({manufacturer} IR)...")
     action_started_at = time.perf_counter()
     subprocess.run(
@@ -336,6 +361,7 @@ def send_key(key_name, manufacturer):
         capture_output=True,
         text=True,
     )
+    LAST_FLIRC_AT = time.perf_counter()
     return action_started_at
 
 
@@ -642,6 +668,7 @@ def main():
             print("STEP 2: Starting the standby wait.")
             wait_with_countdown(camera, configuration['standby_seconds'], run_idx)
 
+            wake_flirc()                     # awake for the timed Power ON (the pre-check below takes 2 s)
             frame_capture = CameraFrameCapture(camera)
             frame_capture.start()
             try:
