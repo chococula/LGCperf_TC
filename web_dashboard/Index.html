@@ -235,7 +235,7 @@ function setLocalView(on) {
 }
 // What each TC measures, shown under the title for the selected tab.
 const TC_DEFINITIONS = {
-  Omedia_TC01: 'Home screen wake time: from the Power ON IR send until the camera frame reaches the Home similarity threshold (<code>TM_CCOEFF_NORMED</code>).',
+  Omedia_TC01: 'Home screen wake time from the Power ON IR send (TV off for Standby_Seconds before). <b>Home_Time_ms</b>: the TV screen matches the Home reference (<code>TM_CCOEFF_NORMED</code> similarity threshold). <b>Settle_Time_ms</b>: Home has appeared and the screen stays still for 1 s (Hisense runs).',
   Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA TV Channel: IR CH+/CH-) until the full-screen picture lands (an area that is empty while loading gets filled).',
 };
 function renderDefinition() {
