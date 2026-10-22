@@ -197,7 +197,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b15</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b16</p>
 </div>
 
 <dialog id="player">
@@ -221,6 +221,18 @@ const API_URL = !IN_APPS_SCRIPT && window.LGCPERF_API_URL && !/XXXX/.test(window
 const LIVE = IN_APPS_SCRIPT || !!API_URL;
 // Without the Google Sheet, show the CSV the data editor has open in this browser (same site, shared storage).
 const SHARED_KEY = 'lgcperf-local-data';
+// The editor's file is shown only when asked for (editor's "Back to dashboard" or the button), per tab.
+const LOCAL_VIEW_KEY = 'lgcperf-show-local';
+function wantLocalView() {
+  try {
+    if (new URLSearchParams(location.search).has('local')) sessionStorage.setItem(LOCAL_VIEW_KEY, '1');
+    return sessionStorage.getItem(LOCAL_VIEW_KEY) === '1';
+  } catch (e) { return false; }
+}
+function setLocalView(on) {
+  try { on ? sessionStorage.setItem(LOCAL_VIEW_KEY, '1') : sessionStorage.removeItem(LOCAL_VIEW_KEY); } catch (e) {}
+  if (!on && location.search) history.replaceState(null, '', location.pathname);
+}
 // What each TC measures, shown under the title for the selected tab.
 const TC_DEFINITIONS = {
   Omedia_TC01: 'Home screen wake time: from the Power ON IR send until the camera frame reaches the Home similarity threshold (<code>TM_CCOEFF_NORMED</code>).',
@@ -297,8 +309,8 @@ async function apiCall(name, args) {
   return name === 'getResults' ? json.data : name === 'setExcluded' ? json.row : true;
 }
 
-// Without the Google Sheet: use data.json published with the site, unless the data editor in this
-// browser has a newer CSV open. Fall back to sample data when neither exists.
+// Without the Google Sheet: use data.json published with the site. The CSV open in this browser's data
+// editor is shown only when asked for. Fall back to sample data when neither exists.
 async function loadPublished() {
   try {
     const response = await fetch('data.json', { cache: 'no-store' });
@@ -313,14 +325,13 @@ async function loadPublished() {
 async function offlineData() {
   const published = await loadPublished();
   const shared = sharedLocal();
-  const sharedTime = shared ? Date.parse(String(shared.savedAt).replace(' ', 'T')) || 0 : 0;
   const publishedTime = published ? Date.parse(published.publishedAt) || 0 : 0;
-  if (shared && (!published || sharedTime > publishedTime)) {
+  if (shared && (!published || wantLocalView())) {
     state.source = { kind: 'local', name: shared.name, at: shared.savedAt };
     return shared.data;
   }
   if (published) {
-    state.source = { kind: 'published', at: new Date(publishedTime).toLocaleString() };
+    state.source = { kind: 'published', at: new Date(publishedTime).toLocaleString(), localName: shared && shared.name };
     return published.data;
   }
   state.source = { kind: 'sample' };
@@ -343,10 +354,13 @@ function onData(data) {
       ? `<span class="status-dot"></span>Local file ${esc(source.name)} · from the data editor, ${esc(source.at)} ` +
         '<button class="btn" id="show-published">Show published results</button>'
       : source.kind === 'published'
-        ? `<span class="status-dot"></span>Published results · updated ${esc(source.at)}`
+        ? `<span class="status-dot"></span>Published results · updated ${esc(source.at)}` +
+          (source.localName ? ` <button class="btn" id="show-local">Show editor file ${esc(source.localName)}</button>` : '')
         : 'Sample data · open your CSV in the data editor to see it here';
   const publishedButton = document.getElementById('show-published');
-  if (publishedButton) publishedButton.onclick = () => { try { localStorage.removeItem(SHARED_KEY); } catch (e) {} load(); };
+  if (publishedButton) publishedButton.onclick = () => { setLocalView(false); load(); };
+  const localButton = document.getElementById('show-local');
+  if (localButton) localButton.onclick = () => { setLocalView(true); load(); };
   renderAdmin();
   renderTabs(tcs);
   renderFilters();
@@ -697,7 +711,7 @@ try { state.adminKey = localStorage.getItem(KEY_STORAGE); } catch (e) {}
 renderAdmin();
 load();
 setInterval(load, REFRESH_MS);
-window.addEventListener('storage', e => { if (e.key === SHARED_KEY) load(); });
+window.addEventListener('storage', e => { if (e.key === SHARED_KEY && wantLocalView()) load(); });
 let resizeTimer = null;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
 </script>
