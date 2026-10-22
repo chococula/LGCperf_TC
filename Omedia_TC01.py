@@ -17,7 +17,7 @@ from run_video import make_run_videos
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC01_config.json")
-HOME_REFERENCE_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC01_home_reference.jpg")
+REFERENCE_CHECK_SECONDS = 3.0   # at start: how long the live Home is compared with the reference
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'LG',
     'SoC': 'O22N3',
@@ -138,7 +138,13 @@ def position_camera(camera):
             return False
 
 
-def capture_home_reference(camera, output_dir):
+def home_reference_file(SoC):
+    """Each TV model has its own Home screen, so each SoC keeps its own reference image."""
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in SoC)
+    return os.path.join(SCRIPT_DIR, f"Omedia_TC01_home_reference_{safe}.jpg")
+
+
+def capture_home_reference(camera, output_dir, reference_file):
     reference_path = os.path.join(output_dir, "home_reference.jpg")
     while True:
         print("\nEnsure the TV is ON and showing its Home screen.")
@@ -162,30 +168,30 @@ def capture_home_reference(camera, output_dir):
         approval = input("Use this captured Home screen as the landing reference? (Y/n): ").strip().lower()
         cv2.destroyWindow("Home Reference Preview")
         if approval in ('', 'y', 'yes'):
-            for image_path in (reference_path, HOME_REFERENCE_FILE):
+            for image_path in (reference_path, reference_file):
                 if not cv2.imwrite(image_path, reference):
                     raise RuntimeError(f"Could not save Home screen reference: {image_path}")
-            print(f"Home landing reference saved: {HOME_REFERENCE_FILE}")
+            print(f"Home landing reference saved: {reference_file}")
             return reference
         print("Reference rejected. Capture the Home screen again.")
 
 
-def review_saved_home_reference():
-    if not os.path.isfile(HOME_REFERENCE_FILE):
-        print("No saved Home landing reference. One will be captured now.")
+def review_saved_home_reference(reference_file, SoC):
+    if not os.path.isfile(reference_file):
+        print(f"No saved Home landing reference for {SoC}. One will be captured now.")
         return None
 
-    reference = cv2.imread(HOME_REFERENCE_FILE, cv2.IMREAD_GRAYSCALE)
+    reference = cv2.imread(reference_file, cv2.IMREAD_GRAYSCALE)
     if reference is None:
         print("Saved Home landing reference could not be read; a new one will be captured.")
         return None
 
     cv2.imshow("Saved Home Reference", reference)
     cv2.waitKey(1)
-    reuse = input("Reuse this saved Home landing page? (Y/n): ").strip().lower()
+    reuse = input(f"Reuse this saved Home landing page for {SoC}? (Y/n): ").strip().lower()
     cv2.destroyWindow("Saved Home Reference")
     if reuse in ('', 'y', 'yes'):
-        print(f"Reusing saved Home landing reference: {HOME_REFERENCE_FILE}")
+        print(f"Reusing saved Home landing reference: {reference_file}")
         return reference
 
     print("Saved reference rejected. A new Home screen will be captured.")
@@ -355,6 +361,50 @@ def home_similarity(frame, reference):
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
 
 
+def check_reference_matches_home(camera, reference, configuration):
+    """At start the TV shows Home: the live Home must score above the threshold, or every run would FAIL.
+
+    Home screens with rotating banners (e.g. Hisense VIDAA) score lower; the user can recapture,
+    lower the threshold to what was measured, or continue. Returns the reference to use.
+    """
+    while True:
+        threshold = configuration['home_similarity_threshold']
+        scores = []
+        end_at = time.perf_counter() + REFERENCE_CHECK_SECONDS
+        while time.perf_counter() < end_at:
+            ret, frame = camera.read()
+            if not ret:
+                continue
+            score = home_similarity(frame, reference)
+            scores.append(score)
+            color = (0, 255, 0) if score >= threshold else (0, 0, 255)
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [
+                ("CHECK: live Home vs reference", (255, 255, 255), 1.0),
+                (f"Similarity {score:.3f} / {threshold:.3f}", color, 1.0)]))
+            cv2.waitKey(1)
+        if not scores:
+            raise RuntimeError("No camera frames for the Home reference check.")
+        lowest = min(scores)
+        print(f"[CHECK] Live Home vs reference: lowest similarity {lowest:.3f}, threshold {threshold:.3f}.")
+        if lowest >= threshold:
+            print("[CHECK] OK: the Home screen will be recognized.")
+            return reference
+        suggested = max(0.3, round(lowest - 0.05, 2))
+        print("[CHECK] The live Home scores below the threshold, so Home would not be detected after Power ON.")
+        print("        Is the TV on Home? (After Power ON the TV must open Home, not the last input.)")
+        answer = input(f"  R = recapture the reference, L = lower the threshold to {suggested:.2f}, "
+                       "C = continue anyway, Enter = check again: ").strip().lower()
+        if answer == 'r':
+            reference = capture_home_reference(camera, configuration['calibration_dir'],
+                                               home_reference_file(configuration['SoC']))
+        elif answer == 'l':
+            configuration['home_similarity_threshold'] = suggested
+            save_configuration(CONFIG_FILE, {k: v for k, v in configuration.items() if k != 'calibration_dir'})
+            print(f"[CHECK] Threshold set to {suggested:.2f}.")
+        elif answer == 'c':
+            return reference
+
+
 def check_tv_off(frame_capture, reference, similarity_threshold, output_dir, seconds=PRE_ROLL_SECONDS):
     """Before Power ON, confirm the screen does not already match Home (i.e. the TV really is off).
 
@@ -515,11 +565,15 @@ def main():
             f"Omedia_TC01_Calibration_{calibration_timestamp}_{configuration['SoC']}"
         )
         os.makedirs(calibration_dir, exist_ok=True)
-        reference = review_saved_home_reference()
+        reference_file = home_reference_file(configuration['SoC'])
+        reference = review_saved_home_reference(reference_file, configuration['SoC'])
         if reference is None:
-            reference = capture_home_reference(camera, calibration_dir)
+            reference = capture_home_reference(camera, calibration_dir, reference_file)
         else:
             cv2.imwrite(os.path.join(calibration_dir, "home_reference.jpg"), reference)
+        configuration['calibration_dir'] = calibration_dir
+        reference = check_reference_matches_home(camera, reference, configuration)
+        configuration.pop('calibration_dir')
 
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
