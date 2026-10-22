@@ -18,6 +18,8 @@ from run_video import make_run_videos
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "Omedia_TC01_config.json")
 REFERENCE_CHECK_SECONDS = 3.0   # at start: how long the live Home is compared with the reference
+SCREEN_MARGIN = 12              # the screen area is searched this many pixels around (small camera shifts)
+SCREEN_ROI = None               # [x, y, w, h] of the TV screen; only the screen is compared with Home
 DEFAULT_CONFIGURATION = {
     'manufacturer': 'LG',
     'SoC': 'O22N3',
@@ -26,6 +28,7 @@ DEFAULT_CONFIGURATION = {
     'num_runs': 5,
     'timeout': 180.0,
     'home_similarity_threshold': 0.7,
+    'screen_rois': {},           # per SoC: [x, y, w, h] of the TV screen in the camera view
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
@@ -94,10 +97,12 @@ def get_user_configuration():
         'num_runs': num_runs,
         'timeout': timeout,
         'home_similarity_threshold': home_similarity_threshold,
+        'screen_rois': defaults['screen_rois'],
     }
     print("\nConfiguration:")
     for key, value in configuration.items():
-        print(f"  {key}: {value}")
+        if key != 'screen_rois':
+            print(f"  {key}: {value}")
     if input("Confirm and proceed? (Y/n): ").strip().lower() == 'n':
         return get_user_configuration()
 
@@ -358,7 +363,33 @@ def home_similarity(frame, reference):
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     if blurred.shape[0] < reference.shape[0] or blurred.shape[1] < reference.shape[1]:
         raise RuntimeError("Camera frame is smaller than the saved Home reference.")
+    if SCREEN_ROI:
+        # Only the TV screen: the wall and table around it look the same with the TV off or on.
+        x, y, w, h = SCREEN_ROI
+        m = SCREEN_MARGIN
+        area = blurred[max(0, y - m):y + h + m, max(0, x - m):x + w + m]
+        return float(np.max(cv2.matchTemplate(area, reference[y:y + h, x:x + w], cv2.TM_CCOEFF_NORMED)))
     return float(np.max(cv2.matchTemplate(blurred, reference, cv2.TM_CCOEFF_NORMED)))
+
+
+def select_screen_area(reference, configuration, calibration_dir):
+    """The user drags a box around the TV screen (picture area) on the Home reference; saved per SoC."""
+    global SCREEN_ROI
+    print("\n[SETUP] Drag a box around the TV screen only (not the wall or stand), then press ENTER.")
+    while True:
+        x, y, w, h = cv2.selectROI("Select the TV screen, then ENTER", cv2.cvtColor(reference, cv2.COLOR_GRAY2BGR),
+                                   showCrosshair=False)
+        cv2.destroyWindow("Select the TV screen, then ENTER")
+        if w >= 40 and h >= 40:
+            break
+        print("[SETUP] The box is too small; drag around the whole TV screen.")
+    SCREEN_ROI = [int(x), int(y), int(w), int(h)]
+    configuration['screen_rois'][configuration['SoC']] = SCREEN_ROI
+    save_configuration(CONFIG_FILE, {k: v for k, v in configuration.items() if k != 'calibration_dir'})
+    preview = cv2.cvtColor(reference, cv2.COLOR_GRAY2BGR)
+    cv2.rectangle(preview, (x, y), (x + w, y + h), (0, 255, 255), 2)
+    cv2.imwrite(os.path.join(calibration_dir, "screen_area.jpg"), preview)
+    print(f"[SETUP] TV screen area saved for {configuration['SoC']}: {SCREEN_ROI}")
 
 
 def check_reference_matches_home(camera, reference, configuration):
@@ -397,6 +428,7 @@ def check_reference_matches_home(camera, reference, configuration):
         if answer == 'r':
             reference = capture_home_reference(camera, configuration['calibration_dir'],
                                                home_reference_file(configuration['SoC']))
+            select_screen_area(reference, configuration, configuration['calibration_dir'])
         elif answer == 'l':
             configuration['home_similarity_threshold'] = suggested
             save_configuration(CONFIG_FILE, {k: v for k, v in configuration.items() if k != 'calibration_dir'})
@@ -565,13 +597,21 @@ def main():
             f"Omedia_TC01_Calibration_{calibration_timestamp}_{configuration['SoC']}"
         )
         os.makedirs(calibration_dir, exist_ok=True)
+        global SCREEN_ROI
         reference_file = home_reference_file(configuration['SoC'])
         reference = review_saved_home_reference(reference_file, configuration['SoC'])
+        saved_roi = configuration['screen_rois'].get(configuration['SoC'])
         if reference is None:
             reference = capture_home_reference(camera, calibration_dir, reference_file)
+            saved_roi = None
         else:
             cv2.imwrite(os.path.join(calibration_dir, "home_reference.jpg"), reference)
         configuration['calibration_dir'] = calibration_dir
+        if saved_roi:
+            SCREEN_ROI = saved_roi
+            print(f"[SETUP] Using the saved TV screen area for {configuration['SoC']}: {SCREEN_ROI}")
+        else:
+            select_screen_area(reference, configuration, calibration_dir)
         reference = check_reference_matches_home(camera, reference, configuration)
         configuration.pop('calibration_dir')
 
