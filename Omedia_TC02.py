@@ -27,7 +27,7 @@ import time
 import winsound
 from datetime import datetime
 
-from config_store import load_saved_configuration, save_configuration
+from config_store import choose_option, load_saved_configuration, save_configuration
 from ir_keys import HISENSEVIDAA_KEYS, LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
 from run_video import make_run_videos
@@ -111,13 +111,7 @@ def get_user_configuration():
     print(f"  Omedia_TC02 - {APP_NAME} Live TV Channel Change")
     print("=" * 60)
 
-    while True:
-        manufacturer = input(
-            f"Enter IR key set {tuple(RAW_IR_KEYSETS)} (default: {defaults['manufacturer']}): "
-        ).strip() or defaults['manufacturer']
-        if manufacturer in RAW_IR_KEYSETS:
-            break
-        print(f"Choose one of: {', '.join(RAW_IR_KEYSETS)}")
+    manufacturer = choose_option("IR key set (TV maker)", RAW_IR_KEYSETS, defaults['manufacturer'])
     SoC = input(f"Enter SoC Model (default: {defaults['SoC']}): ").strip() or defaults['SoC']
     SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
@@ -128,24 +122,16 @@ def get_user_configuration():
     default_method = defaults['zap_method'] if defaults['zap_method'] in METHODS else 'Network'
     if manufacturer != 'Samsung' and default_method == 'Network':
         default_method = 'ChUp'          # the network remote API is Samsung only
-    while True:
-        zap_method = input("Channel change method: Network (Samsung, CH+/- over Wi-Fi), Guide (OK, OK, Down, OK) "
-                           f"or ChUp (IR CH+/-) (default: {default_method}): ").strip() or default_method
-        zap_method = {m.lower(): m for m in METHODS}.get(zap_method.lower())
-        if zap_method:
-            break
-        print(f"Choose one of: {', '.join(METHODS)}.")
+    zap_method = choose_option("Channel change method", {
+        'Network': "Samsung only, CH+/- over Wi-Fi",
+        'Guide': "OK, OK, Down, OK",
+        'ChUp': "IR CH+/-",
+    }, default_method)
     tv_ip, zap_direction = defaults['tv_ip'], defaults['zap_direction']
     if zap_method == 'Network':
         tv_ip = input(f"TV IP address (default: {defaults['tv_ip']}): ").strip() or defaults['tv_ip']
     if zap_method in ('Network', 'ChUp'):
-        while True:
-            zap_direction = input("Channel direction: Up, Down, or Alternate "
-                                  f"(default: {defaults['zap_direction']}): ").strip() or defaults['zap_direction']
-            zap_direction = {d.lower(): d for d in ('Up', 'Down', 'Alternate')}.get(zap_direction.lower())
-            if zap_direction:
-                break
-            print("Choose Up, Down, or Alternate.")
+        zap_direction = choose_option("Channel direction", ('Up', 'Down', 'Alternate'), defaults['zap_direction'])
 
     configuration = dict(defaults)
     configuration.update({

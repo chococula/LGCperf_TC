@@ -25,8 +25,8 @@ import winsound
 from datetime import datetime
 
 import kasa
-from config_store import load_saved_configuration, save_configuration
-from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
+from config_store import choose_option, load_saved_configuration, save_configuration
+from ir_keys import HISENSEVIDAA_KEYS, LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
 from run_video import make_run_videos
 
@@ -52,6 +52,7 @@ RAW_IR_KEYSETS = {
     'LG': LG_KEYS,
     'Roku': ROKU_KEYS,
     'Samsung': SAMSUNG_KEYS,
+    'HisenseVidaa': HISENSEVIDAA_KEYS,
 }
 APP_NAME = "YouTube"
 CAMERA_INDEX = 1
@@ -82,13 +83,7 @@ def get_user_configuration():
     print(f"  Omedia_TC03 - {APP_NAME} launch after AC power cycle")
     print("=" * 60)
 
-    while True:
-        manufacturer = input(
-            f"Enter IR key set {tuple(RAW_IR_KEYSETS)} (default: {defaults['manufacturer']}): "
-        ).strip() or defaults['manufacturer']
-        if manufacturer in RAW_IR_KEYSETS:
-            break
-        print(f"Choose one of: {', '.join(RAW_IR_KEYSETS)}")
+    manufacturer = choose_option("IR key set (TV maker)", RAW_IR_KEYSETS, defaults['manufacturer'])
     SoC = input(f"Enter SoC Model (default: {defaults['SoC']}): ").strip() or defaults['SoC']
     SWV = input(f"Enter Software Version (default: {defaults['SWV']}): ").strip() or defaults['SWV']
     LGCV = input(f"Enter LG CV Version (default: {defaults['LGCV']}): ").strip() or defaults['LGCV']
