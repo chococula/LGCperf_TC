@@ -28,7 +28,7 @@ import winsound
 from datetime import datetime
 
 from config_store import load_saved_configuration, save_configuration
-from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
+from ir_keys import HISENSEVIDAA_KEYS, LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
 from run_video import make_run_videos
 from samsung_remote import CHANNEL_KEYS, NetworkRemote
@@ -60,6 +60,7 @@ RAW_IR_KEYSETS = {
     'LG': LG_KEYS,
     'Roku': ROKU_KEYS,
     'Samsung': SAMSUNG_KEYS,
+    'HisenseVidaa': HISENSEVIDAA_KEYS,
 }
 APP_NAME = "Samsung TV Plus"
 CAMERA_INDEX = 1
@@ -125,9 +126,11 @@ def get_user_configuration():
     zap_interval_seconds = ask_number("Enter seconds to watch each channel before the next change",
                                       defaults['zap_interval_seconds'], int, lambda v: v >= 0)
     default_method = defaults['zap_method'] if defaults['zap_method'] in METHODS else 'Network'
+    if manufacturer != 'Samsung' and default_method == 'Network':
+        default_method = 'ChUp'          # the network remote API is Samsung only
     while True:
-        zap_method = input("Channel change method: Network (CH+/- over Wi-Fi), Guide (OK, OK, Down, OK) "
-                           f"or ChUp (IR) (default: {default_method}): ").strip() or default_method
+        zap_method = input("Channel change method: Network (Samsung, CH+/- over Wi-Fi), Guide (OK, OK, Down, OK) "
+                           f"or ChUp (IR CH+/-) (default: {default_method}): ").strip() or default_method
         zap_method = {m.lower(): m for m in METHODS}.get(zap_method.lower())
         if zap_method:
             break
@@ -135,6 +138,7 @@ def get_user_configuration():
     tv_ip, zap_direction = defaults['tv_ip'], defaults['zap_direction']
     if zap_method == 'Network':
         tv_ip = input(f"TV IP address (default: {defaults['tv_ip']}): ").strip() or defaults['tv_ip']
+    if zap_method in ('Network', 'ChUp'):
         while True:
             zap_direction = input("Channel direction: Up, Down, or Alternate "
                                   f"(default: {defaults['zap_direction']}): ").strip() or defaults['zap_direction']
@@ -569,7 +573,7 @@ def select_plan(camera, step_no, what, saved=None):
             draw_plan(preview, clicks[0], plan['rows'], plan['cols'], plan['steps'])
             route = route_from_plan(plan['rows'], plan['cols'])
             lines = [(f"Planned: {describe_route(route)} + OK", (0, 255, 255), 1.0),
-                     ("Arrow keys adjust,  R = start over,  ENTER = go", (255, 255, 255), 0.8)]
+                     ("Arrow keys adjust,  R = start over,  S = skip step,  ENTER = go", (255, 255, 255), 0.8)]
         cv2.imshow(window_name, draw_overlay(preview, lines))
         code = cv2.waitKeyEx(30)
         if code in ARROW_KEYS and len(clicks) == 2:
@@ -584,6 +588,10 @@ def select_plan(camera, step_no, what, saved=None):
         elif code in (ord('r'), ord('R')):
             clicks.clear()
             plan['steps'] = None
+        elif code in (ord('s'), ord('S')):
+            cv2.destroyWindow(window_name)
+            print(f"[SETUP] Step {step_no} skipped.")
+            return None
         elif code in (ord('q'), ord('Q')):
             cv2.destroyWindow(window_name)
             raise KeyboardInterrupt(f"Step {step_no} selection canceled.")
@@ -607,13 +615,16 @@ def plan_step(configuration, camera, step_no, what):
     """
     saved_steps = configuration['plan_steps']
     saved = saved_steps.get(str(step_no), {}).get('clicks') or None
-    route, focus_point, target_point = select_plan(camera, step_no, what,
-                                                   [tuple(p) for p in saved] if saved else None)
-    saved_steps[str(step_no)] = {'clicks': [[int(v) for v in focus_point], [int(v) for v in target_point]],
-                                 'route': route}
+    chosen = select_plan(camera, step_no, what, [tuple(p) for p in saved] if saved else None)
+    if chosen is None:
+        return None
+    route, focus_point, target_point = chosen
+    step = {'clicks': [[int(v) for v in focus_point], [int(v) for v in target_point]], 'route': route}
+    saved_steps[str(step_no)] = step
     save_configuration(CONFIG_FILE, configuration)
     replay_route(route, configuration['manufacturer'], camera)
     send_key('OK', configuration['manufacturer'])
+    return step
 
 
 def wait_until_playing(camera, message):
@@ -662,7 +673,7 @@ def calibrate_playback(configuration, camera, calibration_dir):
     """
     frame = wait_until_playing(camera, "Waiting for the channel to play.")
     cv2.imwrite(os.path.join(calibration_dir, "live_channel.jpg"), frame)
-    if configuration['zap_method'] in ('Guide', 'Network'):
+    if configuration['zap_method'] in ('Guide', 'Network', 'ChUp'):
         roi = select_landing_area(configuration, camera, calibration_dir)
         configuration['stream_roi'] = roi
         save_configuration(CONFIG_FILE, configuration)
@@ -693,11 +704,13 @@ def show_for(camera, seconds, label):
 def replay_saved_navigation(configuration, camera, saved):
     """Run the saved navigation for this model with no clicks: Home, TV Plus, each planned step, each + OK."""
     manufacturer = configuration['manufacturer']
-    print(f"[SETUP] Replaying the saved navigation: Home -> {', '.join(saved['route'])} + OK", end='')
+    print("[SETUP] Replaying the saved navigation: Home", end='')
     press_home(manufacturer, camera)
-    replay_route(saved['route'], manufacturer, camera)
-    send_key('OK', manufacturer)
-    show_for(camera, STEP_LOAD_SECONDS, f"Opening {APP_NAME}...")
+    if saved['route']:                                  # Samsung: PACE step to TV Plus
+        print(f" -> {', '.join(saved['route'])} + OK", end='')
+        replay_route(saved['route'], manufacturer, camera)
+        send_key('OK', manufacturer)
+        show_for(camera, STEP_LOAD_SECONDS, f"Opening {APP_NAME}...")
     for step_no in sorted(saved['plan_steps'], key=int):
         keys = saved['plan_steps'][step_no]['route']
         print(f" -> step {step_no}: {describe_route(keys)} + OK", end='')
@@ -919,6 +932,8 @@ def select_landing_area(configuration, camera, calibration_dir):
     print("\n[SETUP] One unmeasured channel change to choose the landing area.")
     if configuration['zap_method'] == 'Network':
         NETWORK_REMOTE.send(channel_key(configuration, 0))
+    elif configuration['zap_method'] == 'ChUp':
+        send_key(ir_channel_key(configuration, 0), configuration['manufacturer'])
     else:
         guide_keys(configuration, camera, "SETUP")
         send_key('OK', configuration['manufacturer'])
@@ -1103,9 +1118,33 @@ def zap_by_network(configuration, camera, run_idx, output_dir, roi):
         frame_capture.stop()
 
 
+def ir_channel_key(configuration, run_idx):
+    """IR key name ChUp / ChDown for this run (same direction rule as the network keys)."""
+    return 'ChUp' if channel_key(configuration, run_idx) == CHANNEL_KEYS['Up'] else 'ChDown'
+
+
+def zap_by_ir(configuration, camera, run_idx, output_dir, roi):
+    """Live TV playing: pre-roll, then IR CH+/CH- starts the timer; stop at the landing."""
+    key = ir_channel_key(configuration, run_idx)
+    frame_capture = CameraFrameCapture(camera)
+    frame_capture.start()
+    try:
+        pre_frames, _, _ = capture_pre_roll(frame_capture, roi)
+        frame_capture.clear_buffer()
+        print(f"[RUN {run_idx}] IR {key}; the timer starts now.")
+        key_pressed_at = send_key(key, configuration['manufacturer'])
+        winsound.Beep(1500, 300)
+        return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
+                               key_pressed_at, pre_frames)
+    finally:
+        frame_capture.stop()
+
+
 def zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold):
     if configuration['zap_method'] == 'Network':
         return zap_by_network(configuration, camera, run_idx, output_dir, roi)
+    if configuration['zap_method'] == 'ChUp':
+        return zap_by_ir(configuration, camera, run_idx, output_dir, roi)
     if configuration['zap_method'] == 'Guide':
         return zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold)
     frame_capture = CameraFrameCapture(camera)
@@ -1170,7 +1209,7 @@ def main():
 
         model = configuration['SoC']
         saved_navigation = configuration['navigation'].get(model)
-        expected_detector = 'landing_area' if configuration['zap_method'] in ('Guide', 'Network') else 'motion'
+        expected_detector = 'landing_area'
         if saved_navigation and saved_navigation.get('detector') != expected_detector:
             print(f"[SETUP] The saved navigation for {model} was made for another detection method; set it up again.")
             saved_navigation = None
@@ -1178,23 +1217,31 @@ def main():
                                       ).strip().lower() in ('', 'y', 'yes'):
             roi, motion_threshold = replay_saved_navigation(configuration, camera, saved_navigation)
         else:
-            # Input 1: Samsung TV Plus on Home (PACE_01), then OK.
-            route = calibrate_route(configuration, camera)
-            replay_route(route, configuration['manufacturer'], camera)
-            send_key('OK', configuration['manufacturer'])
-            # Input 2: the Live TV channel inside TV Plus, then OK.
-            plan_step(configuration, camera, 2, "the Live TV channel")
-            # Input 3: one more step inside Live TV, then OK.
-            plan_step(configuration, camera, 3, "the next item in Live TV")
+            steps = {}
+            if configuration['manufacturer'] == 'Samsung':
+                # Input 1: Samsung TV Plus on Home (PACE_01), then OK.
+                route = calibrate_route(configuration, camera)
+                replay_route(route, configuration['manufacturer'], camera)
+                send_key('OK', configuration['manufacturer'])
+            else:
+                # Input 1 on other TVs (e.g. Hisense VIDAA): planned keys from Home to the app, then OK.
+                route = []
+                configuration['route'] = []
+                press_home(configuration['manufacturer'], camera)
+                steps['1'] = plan_step(configuration, camera, 1, "the app on Home (e.g. Live TV)")
+            # Input 2: the Live TV channel, then OK.  Input 3: one more step, then OK.  (S skips a step.)
+            steps['2'] = plan_step(configuration, camera, 2, "the Live TV channel")
+            steps['3'] = plan_step(configuration, camera, 3, "the next item in Live TV")
+            steps = {number: step for number, step in steps.items() if step}
             roi, motion_threshold = calibrate_playback(configuration, camera, calibration_dir)
             # Keep this model's navigation so later sessions run without clicks.
             configuration['navigation'][model] = {
-                'route': configuration['route'],
-                'plan_steps': configuration['plan_steps'],
+                'route': route,
+                'plan_steps': steps,
                 'stream_roi': [int(v) for v in roi],
                 'motion_threshold': float(motion_threshold),
                 'zap_method': configuration['zap_method'],
-                'detector': 'landing_area' if configuration['zap_method'] in ('Guide', 'Network') else 'motion',
+                'detector': 'landing_area',
             }
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
