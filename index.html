@@ -78,6 +78,8 @@
   .build { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
   .build-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
   .build-head span:last-child { font-family: var(--font-mono); color: var(--muted); }
+  .delta { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .delta.best { color: var(--pass); font-weight: 600; }
   .build-track { position: relative; height: 18px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
   .build-foot { font-size: 12px; }
   .build-foot b { font: 600 16px var(--font-display); }
@@ -162,11 +164,16 @@
       <button class="btn" data-range="all">All</button>
     </div>
     <label>Session<select id="f-Session"></select></label>
+    <label>TV maker<select id="f-Manufacturer"></select></label>
     <label>SoC<select id="f-SoC"></select></label>
     <label>SW Version<select id="f-SWV"></select></label>
     <label>LG CV Version<select id="f-LGCV"></select></label>
     <label>Status<select id="f-Status"></select></label>
     <label>Metric<select id="metric"></select></label>
+    <label>Compare by<select id="compare">
+      <option value="build">Build</option>
+      <option value="maker">TV maker</option>
+    </select></label>
     <label class="check"><input type="checkbox" id="show-excluded" checked> Show excluded rows</label>
   </div>
 
@@ -179,7 +186,7 @@
       <div class="legend" id="legend"></div>
     </div>
     <div class="panel">
-      <h2>Average by Build</h2>
+      <h2 id="builds-title">Average by Build</h2>
       <div class="chart" id="builds"></div>
     </div>
   </div>
@@ -189,7 +196,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-21 b12</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b13</p>
 </div>
 
 <dialog id="player">
@@ -202,7 +209,7 @@
 
 <script>
 const REFRESH_MS = 30000;
-const FILTER_KEYS = ['Session', 'SoC', 'SWV', 'LGCV', 'Status'];
+const FILTER_KEYS = ['Session', 'Manufacturer', 'SoC', 'SWV', 'LGCV', 'Status'];
 const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
@@ -237,6 +244,12 @@ function fmt(n, digits = 0) { return n == null ? '–' : n.toLocaleString(undefi
 function buildKey(r) {
   const fromDir = String(r.Directory || '').match(/_([^_\/]+)_SWV([^_\/]+)_LGCV([^_\/]+)$/) || [];
   return [r.SoC || fromDir[1], r.SWV || fromDir[2], r.LGCV || fromDir[3]].filter(Boolean).join(' / ') || 'Unknown';
+}
+// Series for the charts: the build (with its TV maker), or only the TV maker when comparing makers.
+function groupKey(r) {
+  const maker = r.Manufacturer || '';
+  if (document.getElementById('compare').value === 'maker') return maker || 'Unknown maker';
+  return maker ? `${maker} · ${buildKey(r)}` : buildKey(r);
 }
 function rowId(r) { return state.tc + '|' + r.Row_ID; }
 function isExcluded(r) { return String(r.Excluded).toUpperCase() === 'Y'; }
@@ -416,7 +429,7 @@ function renderFilters() {
 }
 
 function setupStaticFilters() {
-  ['f-from', 'f-to', 'show-excluded'].forEach(id => document.getElementById(id).onchange = render);
+  ['f-from', 'f-to', 'show-excluded', 'compare'].forEach(id => document.getElementById(id).onchange = render);
   document.querySelectorAll('[data-range]').forEach(button => button.onclick = () => {
     const range = button.dataset.range, today = new Date();
     const from = document.getElementById('f-from'), to = document.getElementById('f-to');
@@ -498,7 +511,7 @@ function renderTrend(rows, metric, outliers) {
   const points = rows.map(r => ({ v: num(r[metric]), r })).filter(p => p.v != null);
   if (!points.length) { box.innerHTML = '<div class="empty">No measurements in this range</div>'; legend.innerHTML = ''; return; }
 
-  const builds = [...new Set(points.map(p => buildKey(p.r)))];
+  const builds = [...new Set(points.map(p => groupKey(p.r)))];
   const color = b => cssVar(SERIES_COLORS[builds.indexOf(b) % SERIES_COLORS.length]);
   // Draw at the panel's own width so the chart never needs a horizontal scrollbar.
   const W = Math.max(280, Math.floor(box.clientWidth) || 640), H = 260, L = 56, R = 14, T = 12, B = 28;
@@ -514,7 +527,7 @@ function renderTrend(rows, metric, outliers) {
   }
   svg += `<text x="${L}" y="${H - 6}">oldest</text><text x="${W - R}" y="${H - 6}" text-anchor="end">latest</text>`;
   builds.forEach(b => {
-    const series = points.map((p, idx) => ({ ...p, idx })).filter(p => buildKey(p.r) === b);
+    const series = points.map((p, idx) => ({ ...p, idx })).filter(p => groupKey(p.r) === b);
     const path = series.map((p, k) => `${k ? 'L' : 'M'}${x(p.idx)},${y(p.v)}`).join(' ');
     svg += `<path d="${path}" fill="none" stroke="${color(b)}" stroke-width="1.5" opacity="0.5"/>`;
     series.forEach(p => {
@@ -533,11 +546,18 @@ function renderTrend(rows, metric, outliers) {
 function renderBuilds(statRows, metric) {
   const box = document.getElementById('builds');
   const groups = {};
-  statRows.forEach(r => { const v = num(r[metric]); if (v != null) (groups[buildKey(r)] = groups[buildKey(r)] || []).push(v); });
+  document.getElementById('builds-title').textContent =
+    document.getElementById('compare').value === 'maker' ? 'Average by TV maker' : 'Average by Build';
+  statRows.forEach(r => { const v = num(r[metric]); if (v != null) (groups[groupKey(r)] = groups[groupKey(r)] || []).push(v); });
   const entries = Object.entries(groups).map(([b, vs]) => [b, stats(vs), vs.length]);
   if (!entries.length) { box.innerHTML = '<div class="empty">No passing runs in this range</div>'; return; }
 
-  const builds = [...new Set(filteredRows().filter(r => !isExcluded(r)).map(buildKey))];
+  const builds = [...new Set(filteredRows().filter(r => !isExcluded(r)).map(groupKey))];
+  // With two or more groups, each average is compared with the fastest one.
+  const best = Math.min(...entries.map(([, s]) => s.mean));
+  const delta = s => entries.length < 2 ? ''
+    : s.mean === best ? '<span class="delta best">fastest</span>'
+    : `<span class="delta">+${fmt(s.mean - best)} ms (+${fmt((s.mean / best - 1) * 100)}%) vs fastest</span>`;
   const maxV = Math.max(...entries.map(([, s]) => s.max)) || 1;
   box.innerHTML = entries.map(([b, s, n]) => {
     const c = cssVar(SERIES_COLORS[builds.indexOf(b) % SERIES_COLORS.length]);
@@ -547,7 +567,7 @@ function renderBuilds(statRows, metric) {
         <div style="position:absolute;left:${(s.min / maxV) * 100}%;width:${((s.max - s.min) / maxV) * 100}%;top:7px;height:4px;background:${c};opacity:.4"></div>
         <div style="width:${(s.mean / maxV) * 100}%;height:100%;background:${c};opacity:.85"></div>
       </div>
-      <div class="build-foot"><b>${fmt(s.mean)} ms</b> <span class="muted">avg · ${fmt(s.min)}–${fmt(s.max)} ms</span></div>
+      <div class="build-foot"><b>${fmt(s.mean)} ms</b> <span class="muted">avg · ${fmt(s.min)}–${fmt(s.max)} ms</span> ${delta(s)}</div>
     </div>`;
   }).join('');
 }

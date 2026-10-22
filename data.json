@@ -13,7 +13,8 @@
     "Directory": "C:/Temp\\Omedia_TC01_01_20261020_235027_U8000_SWV1300_LGCV8.2.008",
     "Row_ID": "pub-1",
     "Video": "media/Omedia_TC01_01_20261020_235027_U8000_SWV1300_LGCV8.2.008.mp4",
-    "GIF": "media/Omedia_TC01_01_20261020_235027_U8000_SWV1300_LGCV8.2.008.gif"
+    "GIF": "media/Omedia_TC01_01_20261020_235027_U8000_SWV1300_LGCV8.2.008.gif",
+    "Manufacturer": "Samsung"
    },
    {
     "TC": "Omedia_TC01",
@@ -26,7 +27,8 @@
     "Directory": "C:/Temp\\Omedia_TC01_02_20261020_235535_U8000_SWV1300_LGCV8.2.008",
     "Row_ID": "pub-2",
     "Video": "media/Omedia_TC01_02_20261020_235535_U8000_SWV1300_LGCV8.2.008.mp4",
-    "GIF": "media/Omedia_TC01_02_20261020_235535_U8000_SWV1300_LGCV8.2.008.gif"
+    "GIF": "media/Omedia_TC01_02_20261020_235535_U8000_SWV1300_LGCV8.2.008.gif",
+    "Manufacturer": "Samsung"
    },
    {
     "TC": "Omedia_TC01",
@@ -39,7 +41,8 @@
     "Directory": "C:/Temp\\Omedia_TC01_03_20261021_000044_U8000_SWV1300_LGCV8.2.008",
     "Row_ID": "pub-3",
     "Video": "media/Omedia_TC01_03_20261021_000044_U8000_SWV1300_LGCV8.2.008.mp4",
-    "GIF": "media/Omedia_TC01_03_20261021_000044_U8000_SWV1300_LGCV8.2.008.gif"
+    "GIF": "media/Omedia_TC01_03_20261021_000044_U8000_SWV1300_LGCV8.2.008.gif",
+    "Manufacturer": "Samsung"
    },
    {
     "TC": "Omedia_TC01",
@@ -52,7 +55,8 @@
     "Directory": "C:/Temp\\Omedia_TC01_04_20261021_000554_U8000_SWV1300_LGCV8.2.008",
     "Row_ID": "pub-4",
     "Video": "media/Omedia_TC01_04_20261021_000554_U8000_SWV1300_LGCV8.2.008.mp4",
-    "GIF": "media/Omedia_TC01_04_20261021_000554_U8000_SWV1300_LGCV8.2.008.gif"
+    "GIF": "media/Omedia_TC01_04_20261021_000554_U8000_SWV1300_LGCV8.2.008.gif",
+    "Manufacturer": "Samsung"
    },
    {
     "TC": "Omedia_TC01",
@@ -65,7 +69,8 @@
     "Directory": "C:/Temp\\Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008",
     "Row_ID": "pub-5",
     "Video": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.mp4",
-    "GIF": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.gif"
+    "GIF": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.gif",
+    "Manufacturer": "Samsung"
    }
   ],
   "Omedia_TC02": [
