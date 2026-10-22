@@ -1,5 +1,5 @@
 {
- "publishedAt": "2026-10-22T18:45:35+00:00",
+ "publishedAt": "2026-10-22T22:16:46+00:00",
  "data": {
   "Omedia_TC01": [
    {
@@ -71,6 +71,81 @@
     "Video": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC01_05_20261021_001102_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "1",
+    "Timestamp": "20261022_144603",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "3095.47",
+    "Settle_Time_ms": "7206.84",
+    "Frames": "245",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_01_20261022_144603_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Row_ID": "pub-tc01-hisense-1",
+    "Video": "media/Omedia_TC01_01_20261022_144603_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC01_01_20261022_144603_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "2",
+    "Timestamp": "20261022_145125",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "4949.04",
+    "Settle_Time_ms": "7157.07",
+    "Frames": "244",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_02_20261022_145125_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Row_ID": "pub-tc01-hisense-2",
+    "Video": "media/Omedia_TC01_02_20261022_145125_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC01_02_20261022_145125_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "3",
+    "Timestamp": "20261022_145646",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "5829.63",
+    "Settle_Time_ms": "7142.1",
+    "Frames": "243",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_03_20261022_145646_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Row_ID": "pub-tc01-hisense-3",
+    "Video": "media/Omedia_TC01_03_20261022_145646_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC01_03_20261022_145646_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "4",
+    "Timestamp": "20261022_150206",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "5156.77",
+    "Settle_Time_ms": "6964.7",
+    "Frames": "236",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_04_20261022_150206_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Row_ID": "pub-tc01-hisense-4",
+    "Video": "media/Omedia_TC01_04_20261022_150206_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC01_04_20261022_150206_43A6GV_SWV0015.09.09_LGCV001.gif"
+   },
+   {
+    "TC": "Omedia_TC01",
+    "Run": "5",
+    "Timestamp": "20261022_150725",
+    "Standby_Seconds": "300",
+    "Home_Time_ms": "3571.57",
+    "Settle_Time_ms": "7475.82",
+    "Frames": "253",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC01_05_20261022_150725_43A6GV_SWV0015.09.09_LGCV001",
+    "Manufacturer": "HisenseVidaa",
+    "Row_ID": "pub-tc01-hisense-5",
+    "Video": "media/Omedia_TC01_05_20261022_150725_43A6GV_SWV0015.09.09_LGCV001.mp4",
+    "GIF": "media/Omedia_TC01_05_20261022_150725_43A6GV_SWV0015.09.09_LGCV001.gif"
    }
   ],
   "Omedia_TC02": [
