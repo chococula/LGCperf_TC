@@ -28,6 +28,7 @@ DEFAULT_CONFIGURATION = {
     'num_runs': 5,
     'timeout': 180.0,
     'home_similarity_threshold': 0.7,
+    'standby_seconds': 300,      # wait with the TV off before Power ON
     'screen_rois': {},           # per SoC: [x, y, w, h] of the TV screen in the camera view
 }
 
@@ -39,7 +40,6 @@ RAW_IR_KEYSETS = {
     'HisenseVidaa': HISENSEVIDAA_KEYS,
 }
 CAMERA_INDEX = 1
-STANDBY_SECONDS = 300
 CAPTURE_WINDOW = "Omedia_TC01 Capture"
 FRAME_CAPTURE_SIMILARITY = 0.85
 PRE_ROLL_SECONDS = 2.0
@@ -65,6 +65,17 @@ def get_user_configuration():
             print("Please enter a positive number.")
         except ValueError:
             print("Please enter a valid number.")
+
+    while True:
+        try:
+            standby_seconds = int(input(f"Enter standby wait with the TV off, in seconds "
+                                        f"(default: {defaults['standby_seconds']}): ").strip()
+                                  or str(defaults['standby_seconds']))
+            if standby_seconds >= 0:
+                break
+            print("Please enter 0 or more.")
+        except ValueError:
+            print("Please enter a whole number of seconds.")
 
     while True:
         try:
@@ -97,6 +108,7 @@ def get_user_configuration():
         'num_runs': num_runs,
         'timeout': timeout,
         'home_similarity_threshold': home_similarity_threshold,
+        'standby_seconds': standby_seconds,
         'screen_rois': defaults['screen_rois'],
     }
     print("\nConfiguration:")
@@ -628,7 +640,7 @@ def main():
             send_key('Power', configuration['manufacturer'])
             winsound.Beep(1000, 200)
             print("STEP 2: Starting the standby wait.")
-            wait_with_countdown(camera, STANDBY_SECONDS, run_idx)
+            wait_with_countdown(camera, configuration['standby_seconds'], run_idx)
 
             frame_capture = CameraFrameCapture(camera)
             frame_capture.start()
@@ -678,7 +690,7 @@ def main():
                 'TC': 'Omedia_TC01',
                 'Run': result['run'],
                 'Timestamp': timestamp,
-                'Standby_Seconds': STANDBY_SECONDS,
+                'Standby_Seconds': configuration['standby_seconds'],
                 'Home_Time_ms': (
                     round(result['response_time_ms'], 2) if result['response_time_ms'] is not None else None
                 ),
@@ -701,7 +713,7 @@ def main():
                 'SoC': configuration['SoC'],
                 'SWV': configuration['SWV'],
                 'LGCV': configuration['LGCV'],
-                'Standby_Seconds': STANDBY_SECONDS,
+                'Standby_Seconds': configuration['standby_seconds'],
                 'Similarity_Threshold': configuration['home_similarity_threshold'],
                 'Home_Time_ms': row['Home_Time_ms'],
                 'Frames': row['Frames'],
