@@ -5,7 +5,8 @@ Setup (three inputs, each a click on the live camera view, then Enter):
   2. TV Plus: click the highlighted item, then the Live TV channel. The planned keys (e.g. Down x1,
      Right x2) are drawn on screen first; arrow keys adjust them; Enter sends exactly those keys + OK.
   3. Live TV: the same as step 2 for one more item, then OK.
-  The middle of the playing picture is used to detect playback; its motion sets the threshold.
+  Detection (asked each session): EmptyArea = an area picked on screen that is empty while the next
+  channel loads; Motion = the middle of the picture moves again after going black/frozen.
 Each run:
   Network method (default): Live TV plays, CH+/CH- is sent over Wi-Fi (Samsung remote API; IR channel
   keys are ignored in TV Plus), 2 s pre-roll, the key starts the timer -> stop when the picture lands.
@@ -47,6 +48,7 @@ DEFAULT_CONFIGURATION = {
     'zap_method': 'Network',
     'tv_ip': '192.168.4.140',
     'zap_direction': 'Alternate',
+    'detector': 'EmptyArea',
     'route': [],
     'target_point': [],
     'plan_steps': {},
@@ -73,6 +75,11 @@ PLAYBACK_MIN_FRACTION = 0.7     # ... at least this share move; the start is the
 STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
 MIN_STILL_FRAMES = 2            # after the key the picture must stop (black/frozen) this many frames first
 METHODS = ('Network', 'Guide', 'ChUp')
+DETECTORS = {
+    'EmptyArea': "pick an area that is empty while the next channel loads",
+    'Motion': "the picture moves again after going black/frozen",
+}
+SAVED_DETECTOR = {'EmptyArea': 'landing_area', 'Motion': 'motion'}   # name kept in saved navigation
 GUIDE_KEY_GAP_SECONDS = 1.0     # Guide method: wait between OK, OK and Down
 GUIDE_OPEN_SECONDS = 5.0        # Guide method: stay on the GUIDE this long after the second OK
 ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
@@ -132,6 +139,7 @@ def get_user_configuration():
         tv_ip = input(f"TV IP address (default: {defaults['tv_ip']}): ").strip() or defaults['tv_ip']
     if zap_method in ('Network', 'ChUp'):
         zap_direction = choose_option("Channel direction", ('Up', 'Down', 'Alternate'), defaults['zap_direction'])
+    detector = choose_option("Channel change detection", DETECTORS, defaults['detector'])
 
     configuration = dict(defaults)
     configuration.update({
@@ -145,10 +153,11 @@ def get_user_configuration():
         'zap_method': zap_method,
         'tv_ip': tv_ip,
         'zap_direction': zap_direction,
+        'detector': detector,
     })
     print("\nConfiguration:")
     for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds', 'zap_method',
-                'tv_ip', 'zap_direction'):
+                'tv_ip', 'zap_direction', 'detector'):
         print(f"  {key}: {configuration[key]}")
     if configuration['route']:
         print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
@@ -654,12 +663,12 @@ def measure_playing_motion(camera, roi, seconds=2.0):
 def calibrate_playback(configuration, camera, calibration_dir):
     """After the last precondition step the channel plays; set up what marks the next channel's start.
 
-    Guide method: the user picks an area that is empty while loading (landing area).
-    Ch Up method: the motion of the middle of the playing picture.
+    EmptyArea: the user picks an area that is empty while loading (landing area).
+    Motion: the motion of the middle of the playing picture sets the threshold.
     """
     frame = wait_until_playing(camera, "Waiting for the channel to play.")
     cv2.imwrite(os.path.join(calibration_dir, "live_channel.jpg"), frame)
-    if configuration['zap_method'] in ('Guide', 'Network', 'ChUp'):
+    if configuration['detector'] == 'EmptyArea':
         roi = select_landing_area(configuration, camera, calibration_dir)
         configuration['stream_roi'] = roi
         save_configuration(CONFIG_FILE, configuration)
@@ -1060,6 +1069,28 @@ def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_presse
     }
 
 
+def measure_after_key(configuration, frame_capture, roi, motion_threshold, run_idx, output_dir,
+                      key_label, press, check_playing_first=True):
+    """Pre-roll, press the key (timer starts), then wait for the new channel with the chosen detection."""
+    motion = configuration['detector'] == 'Motion'
+    if motion and check_playing_first:
+        playing, level, pre_frames, last_roi = check_playing(frame_capture, roi, motion_threshold, output_dir)
+        if not playing:
+            return invalid_result(run_idx, output_dir,
+                                  f"the channel was not playing before {key_label} (motion {level:.1f}).")
+    else:
+        pre_frames, last_roi, _ = capture_pre_roll(frame_capture, roi)
+    frame_capture.clear_buffer()
+    print(f"[RUN {run_idx}] {key_label}; the timer starts now.")
+    key_pressed_at = press()
+    winsound.Beep(1500, 300)
+    if motion:
+        return measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, configuration['timeout'],
+                                key_pressed_at, pre_frames, last_roi, key_label=key_label)
+    return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
+                           key_pressed_at, pre_frames)
+
+
 def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold):
     """Samsung: OK, OK opens the GUIDE, Down picks the next channel; OK starts the timer."""
     manufacturer = configuration['manufacturer']
@@ -1068,13 +1099,9 @@ def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_thresho
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
-        pre_frames, _, _ = capture_pre_roll(frame_capture, roi)
-        frame_capture.clear_buffer()
-        print(f"[RUN {run_idx}] OK on the next channel; the timer starts now.")
-        key_pressed_at = send_key('OK', manufacturer)
-        winsound.Beep(1500, 300)
-        return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
-                               key_pressed_at, pre_frames)
+        # The GUIDE is on screen, so the picture is not checked for motion before OK.
+        return measure_after_key(configuration, frame_capture, roi, motion_threshold, run_idx, output_dir,
+                                 "OK", lambda: send_key('OK', manufacturer), check_playing_first=False)
     finally:
         frame_capture.stop()
 
@@ -1087,19 +1114,14 @@ def channel_key(configuration, run_idx):
     return CHANNEL_KEYS[direction]
 
 
-def zap_by_network(configuration, camera, run_idx, output_dir, roi):
+def zap_by_network(configuration, camera, run_idx, output_dir, roi, motion_threshold):
     """Live TV playing: pre-roll, then CH+/CH- over the network starts the timer; stop at the landing."""
     key = channel_key(configuration, run_idx)
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
-        pre_frames, _, _ = capture_pre_roll(frame_capture, roi)
-        frame_capture.clear_buffer()
-        print(f"[RUN {run_idx}] {key} over the network; the timer starts now.")
-        key_pressed_at = NETWORK_REMOTE.send(key)
-        winsound.Beep(1500, 300)
-        return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
-                               key_pressed_at, pre_frames)
+        return measure_after_key(configuration, frame_capture, roi, motion_threshold, run_idx, output_dir,
+                                 key, lambda: NETWORK_REMOTE.send(key))
     finally:
         frame_capture.stop()
 
@@ -1109,45 +1131,21 @@ def ir_channel_key(configuration, run_idx):
     return 'ChUp' if channel_key(configuration, run_idx) == CHANNEL_KEYS['Up'] else 'ChDown'
 
 
-def zap_by_ir(configuration, camera, run_idx, output_dir, roi):
+def zap_by_ir(configuration, camera, run_idx, output_dir, roi, motion_threshold):
     """Live TV playing: pre-roll, then IR CH+/CH- starts the timer; stop at the landing."""
     key = ir_channel_key(configuration, run_idx)
     frame_capture = CameraFrameCapture(camera)
     frame_capture.start()
     try:
-        pre_frames, _, _ = capture_pre_roll(frame_capture, roi)
-        frame_capture.clear_buffer()
-        print(f"[RUN {run_idx}] IR {key}; the timer starts now.")
-        key_pressed_at = send_key(key, configuration['manufacturer'])
-        winsound.Beep(1500, 300)
-        return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
-                               key_pressed_at, pre_frames)
+        return measure_after_key(configuration, frame_capture, roi, motion_threshold, run_idx, output_dir,
+                                 f"IR {key}", lambda: send_key(key, configuration['manufacturer']))
     finally:
         frame_capture.stop()
 
 
 def zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold):
-    if configuration['zap_method'] == 'Network':
-        return zap_by_network(configuration, camera, run_idx, output_dir, roi)
-    if configuration['zap_method'] == 'ChUp':
-        return zap_by_ir(configuration, camera, run_idx, output_dir, roi)
-    if configuration['zap_method'] == 'Guide':
-        return zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold)
-    frame_capture = CameraFrameCapture(camera)
-    frame_capture.start()
-    try:
-        playing, motion, pre_frames, last_roi = check_playing(frame_capture, roi, motion_threshold, output_dir)
-        if not playing:
-            return invalid_result(run_idx, output_dir,
-                                  f"the channel was not playing before Ch Up (motion {motion:.1f}).")
-        frame_capture.clear_buffer()
-        print(f"[RUN {run_idx}] Ch Up; the timer starts now.")
-        key_pressed_at = send_key('ChUp', configuration['manufacturer'])
-        winsound.Beep(1500, 300)
-        return measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir,
-                                configuration['timeout'], key_pressed_at, pre_frames, last_roi)
-    finally:
-        frame_capture.stop()
+    zap = {'Network': zap_by_network, 'ChUp': zap_by_ir, 'Guide': zap_by_guide}[configuration['zap_method']]
+    return zap(configuration, camera, run_idx, output_dir, roi, motion_threshold)
 
 
 def watch(camera, seconds, run_idx):
@@ -1195,7 +1193,7 @@ def main():
 
         model = configuration['SoC']
         saved_navigation = configuration['navigation'].get(model)
-        expected_detector = 'landing_area'
+        expected_detector = SAVED_DETECTOR[configuration['detector']]
         if saved_navigation and saved_navigation.get('detector') != expected_detector:
             print(f"[SETUP] The saved navigation for {model} was made for another detection method; set it up again.")
             saved_navigation = None
@@ -1227,7 +1225,7 @@ def main():
                 'stream_roi': [int(v) for v in roi],
                 'motion_threshold': float(motion_threshold),
                 'zap_method': configuration['zap_method'],
-                'detector': 'landing_area',
+                'detector': expected_detector,
             }
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
