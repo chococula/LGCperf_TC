@@ -1,12 +1,12 @@
 """Capture a whole remote's IR keymap with the Flirc USB receiver, one button at a time.
 
 Run:  python ir_capture.py Hisense
-For each button the tool asks you to press it (twice, to confirm the two readings match).
-Press Enter instead to skip a button the remote does not have. Results are written to
+A window shows which button to press, flashes when the Flirc receives IR (green = key signal,
+orange = too weak / noise), and confirms each button with two matching presses.
+S skips a button the remote does not have, R redoes the current key, B goes back, Q finishes. Results are written to
 ir_keys_<brand>.json and to ir_keys.py as <BRAND>_KEYS (same CSV timing format the TCs send with Flirc).
 """
 import json
-import msvcrt
 import os
 import queue
 import re
@@ -14,6 +14,10 @@ import subprocess
 import sys
 import threading
 import time
+import winsound
+
+import cv2
+import numpy as np
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +39,7 @@ class FlircReceiver:
 
     def __init__(self, raw_log_path):
         self.frames = queue.Queue()
+        self.activity = None        # {'at': perf_counter, 'pulses': n, 'kind': 'key' | 'noise'}
         self.raw_log = open(raw_log_path, 'a', encoding='utf-8')
         self.process = subprocess.Popen([FLIRC_UTIL_PATH, 'device_log', '-i', '-p'], stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -67,27 +72,27 @@ class FlircReceiver:
             self._flush(pending)
 
     def _flush(self, timings):
+        if not timings:
+            return
         # Noise bursts are short; a real key frame has a header and many bits.
-        if len(timings) >= MIN_PULSES:
+        kind = 'key' if len(timings) >= MIN_PULSES else 'noise'
+        self.activity = {'at': time.perf_counter(), 'pulses': len(timings), 'kind': kind}
+        if kind == 'key':
             self.frames.put(list(timings))
 
     def drain(self):
         while not self.frames.empty():
             self.frames.get_nowait()
 
-    def next_frame_or_enter(self):
-        """Wait for a key frame; returns None if the user presses Enter (skip)."""
-        while True:
-            try:
-                frame = self.frames.get(timeout=0.05)
-            except queue.Empty:
-                frame = None
-            if frame is not None:
-                time.sleep(FRAME_GAP_SECONDS)       # let repeat frames of the same press arrive
-                self.drain()
-                return frame
-            if msvcrt.kbhit() and msvcrt.getwch() in ('\r', '\n'):
-                return None
+    def next_frame(self, timeout=0.0):
+        """A key frame if one arrived (repeat frames of the same press are dropped), else None."""
+        try:
+            frame = self.frames.get(timeout=timeout) if timeout else self.frames.get_nowait()
+        except queue.Empty:
+            return None
+        time.sleep(FRAME_GAP_SECONDS)
+        self.drain()
+        return frame
 
     def close(self):
         self.process.terminate()
@@ -125,43 +130,105 @@ def write_ir_keys_py(brand, keys):
     open(path, 'w', encoding='utf-8', newline='\n').write(source)
 
 
+WINDOW = "IR capture"
+GREEN, ORANGE, WHITE, GRAY, YELLOW, RED = (80, 220, 80), (0, 165, 255), (240, 240, 240), (150, 150, 150), (0, 230, 255), (80, 80, 255)
+
+
+def draw_screen(brand, index, label, step, message, message_color, activity, keys, skipped):
+    canvas = np.full((600, 1000, 3), 32, np.uint8)
+    now = time.perf_counter()
+    if activity and now - activity['at'] < 0.6:                 # flash the border on any IR signal
+        color = GREEN if activity['kind'] == 'key' else ORANGE
+        cv2.rectangle(canvas, (0, 0), (999, 599), color, 18)
+        text = (f"IR received: {activity['pulses']} pulses" if activity['kind'] == 'key'
+                else f"IR weak / noise: {activity['pulses']} pulses - point the remote at the Flirc")
+        cv2.putText(canvas, text, (40, 290), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2, cv2.LINE_AA)
+    cv2.putText(canvas, f"{brand} remote  -  key {index}/{len(KEYMAP)}", (40, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, GRAY, 2, cv2.LINE_AA)
+    cv2.putText(canvas, f"Press:  {label}", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 2.0, WHITE, 4, cv2.LINE_AA)
+    cv2.putText(canvas, step, (40, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.1, YELLOW, 2, cv2.LINE_AA)
+    if message:
+        cv2.putText(canvas, message, (40, 350), cv2.FONT_HERSHEY_SIMPLEX, 1.0, message_color, 2, cv2.LINE_AA)
+    for i, (key, _) in enumerate(KEYMAP):                       # progress of all keys
+        x, y = 40 + (i % 5) * 190, 430 + (i // 5) * 50
+        if key in keys:
+            mark, color = '[x]', GREEN
+        elif key in skipped:
+            mark, color = '[-]', GRAY
+        elif i == index - 1:
+            mark, color = '[>]', YELLOW
+        else:
+            mark, color = '[ ]', GRAY
+        cv2.putText(canvas, f"{mark} {key}", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+    cv2.putText(canvas, "S = skip   R = redo this key   B = previous key   Q = finish", (40, 580),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, GRAY, 1, cv2.LINE_AA)
+    cv2.imshow(WINDOW, canvas)
+
+
 def main():
     brand = sys.argv[1] if len(sys.argv) > 1 else input("Remote brand (e.g. Hisense): ").strip() or 'Hisense'
     json_path = os.path.join(SCRIPT_DIR, f"ir_keys_{brand.lower()}.json")
     keys = json.load(open(json_path, encoding='utf-8')) if os.path.exists(json_path) else {}
+    skipped = set()
     receiver = FlircReceiver(os.path.join(SCRIPT_DIR, f"ir_capture_{brand.lower()}_raw.log"))
     time.sleep(1.0)
     receiver.drain()
-    print(f"\nCapturing the {brand} remote. Point it at the Flirc and press each button when asked.")
-    print("Press Enter to skip a button the remote does not have. Ctrl+C stops (captured keys are kept).\n")
+    print(f"Capturing the {brand} remote - follow the '{WINDOW}' window.")
+    cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
+
+    index, first = 0, None
+    message, message_color = '', WHITE
     try:
-        for index, (key, label) in enumerate(KEYMAP, 1):
-            done = ' (already captured - press again to replace, Enter keeps it)' if key in keys else ''
-            print(f"[{index:2d}/{len(KEYMAP)}] Press  {label}{done}")
-            first = receiver.next_frame_or_enter()
+        while index < len(KEYMAP):
+            key, label = KEYMAP[index]
             if first is None:
-                print("        skipped")
+                step = "Press it once" + (" (already captured: press to replace, S keeps it)" if key in keys else "")
+            else:
+                step = "Got it - press the SAME button again to confirm"
+            draw_screen(brand, index + 1, label, step, message, message_color, receiver.activity, keys, skipped)
+            pressed = cv2.waitKey(30) & 0xFF
+            if pressed in (ord('q'), ord('Q'), 27):
+                break
+            if pressed in (ord('s'), ord('S')):
+                if key not in keys:
+                    skipped.add(key)
+                index, first, message = index + 1, None, f"{key} skipped"
+                message_color = GRAY
                 continue
-            while True:
-                print("        got it - press the same button once more to confirm")
-                second = receiver.next_frame_or_enter()
-                if second is None:
-                    print("        kept the first reading")
-                    break
-                if frames_match(first, second):
-                    break
-                print("        the two readings differ - press it again")
-                first = second
+            if pressed in (ord('r'), ord('R')):
+                first, message = None, f"Redo {key}: press it once"
+                message_color = WHITE
+                continue
+            if pressed in (ord('b'), ord('B')) and index > 0:
+                index, first, message = index - 1, None, ''
+                continue
+            frame = receiver.next_frame(timeout=0.0)
+            if frame is None:
+                continue
+            winsound.Beep(1200, 80)
+            if first is None:
+                first, message, message_color = frame, f"1st press OK ({len(frame)} pulses)", GREEN
+                continue
+            if not frames_match(first, frame):
+                first, message, message_color = frame, "The two presses differ - press it again", RED
+                continue
             keys[key] = ','.join(str(t) for t in first)
-            code = decode_nec(first)
-            print(f"        saved {key}: {len(first)} timings" + (f", code {code}" if code else ""))
+            skipped.discard(key)
             json.dump(keys, open(json_path, 'w', encoding='utf-8'), indent=1)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+            code = decode_nec(first)
+            message = f"Saved {key}" + (f"  (code {code})" if code else f"  ({len(first)} pulses)")
+            message_color, first = GREEN, None
+            winsound.Beep(1600, 120)
+            winsound.Beep(2200, 160)
+            index += 1                      # straight to the next key; the 'Saved' message stays on screen
+        draw_screen(brand, min(index + 1, len(KEYMAP)), "done", f"{len(keys)} keys captured - closing",
+                    '', WHITE, None, keys, skipped)
+        cv2.waitKey(1200)
     finally:
         receiver.close()
+        cv2.destroyAllWindows()
     write_ir_keys_py(brand, keys)
-    print(f"\n{len(keys)} keys saved to {json_path} and ir_keys.py ({brand.upper()}_KEYS).")
+    print(f"{len(keys)} keys saved to {json_path} and ir_keys.py ({brand.upper()}_KEYS): {', '.join(keys)}")
 
 
 if __name__ == "__main__":
