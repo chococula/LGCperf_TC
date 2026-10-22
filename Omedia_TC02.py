@@ -7,7 +7,9 @@ Setup (three inputs, each a click on the live camera view, then Enter):
   3. Live TV: the same as step 2 for one more item, then OK.
   The middle of the playing picture is used to detect playback; its motion sets the threshold.
 Each run:
-  Guide method (Samsung, where Ch Up/Down does not work): OK, OK opens the GUIDE, Down moves to the
+  Network method (default): Live TV plays, CH+/CH- is sent over Wi-Fi (Samsung remote API; IR channel
+  keys are ignored in TV Plus), 2 s pre-roll, the key starts the timer -> stop when the picture lands.
+  Guide method: OK, OK opens the GUIDE, Down moves to the
   next channel, 2 s pre-roll, then OK starts the timer -> stop when the new channel's picture appears.
   Ch Up method: 2 s pre-roll while the channel plays -> Ch Up starts the timer -> stop at the first of
   3 consecutive moving frames after the picture went black/frozen. Frames, MP4/GIF, CSV row
@@ -29,6 +31,7 @@ from config_store import load_saved_configuration, save_configuration
 from ir_keys import LG_KEYS, ROKU_KEYS, SAMSUNG_KEYS
 from result_uploader import upload_result, wait_for_uploads
 from run_video import make_run_videos
+from samsung_remote import CHANNEL_KEYS, NetworkRemote
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +44,9 @@ DEFAULT_CONFIGURATION = {
     'num_runs': 5,
     'timeout': 15.0,
     'zap_interval_seconds': 8,
-    'zap_method': 'Guide',
+    'zap_method': 'Network',
+    'tv_ip': '192.168.4.140',
+    'zap_direction': 'Alternate',
     'route': [],
     'target_point': [],
     'plan_steps': {},
@@ -66,6 +71,7 @@ PLAYBACK_WINDOW_FRAMES = 15     # playback = in this many frames (~0.5 s) ...
 PLAYBACK_MIN_FRACTION = 0.7     # ... at least this share move; the start is the window's first frame
 STREAM_EXTRA_SECONDS = 1.0      # keep saving frames this long after the start is confirmed
 MIN_STILL_FRAMES = 2            # after the key the picture must stop (black/frozen) this many frames first
+METHODS = ('Network', 'Guide', 'ChUp')
 GUIDE_KEY_GAP_SECONDS = 1.0     # Guide method: wait between OK, OK and Down
 GUIDE_OPEN_SECONDS = 5.0        # Guide method: stay on the GUIDE this long after the second OK
 ARROW_KEYS = {2424832: 'Left', 2490368: 'Up', 2555904: 'Right', 2621440: 'Down'}   # cv2.waitKeyEx codes
@@ -82,6 +88,7 @@ STEP_LOAD_SECONDS = 6           # saved navigation: wait after each OK for the n
 HOME_SETTLE_SECONDS = 3
 KEY_GAP_SECONDS = 0.5
 CSV_PATH = os.path.join(SCRIPT_DIR, "Omedia_TC02_response.csv")
+NETWORK_REMOTE = None            # NetworkRemote, connected in main() for the Network method
 
 
 def ask_number(prompt, default, cast, valid):
@@ -117,14 +124,24 @@ def get_user_configuration():
     timeout = ask_number("Enter zap timeout in seconds", defaults['timeout'], float, lambda v: v > 0)
     zap_interval_seconds = ask_number("Enter seconds to watch each channel before the next change",
                                       defaults['zap_interval_seconds'], int, lambda v: v >= 0)
-    default_method = 'Guide' if manufacturer == 'Samsung' else defaults['zap_method']
+    default_method = defaults['zap_method'] if defaults['zap_method'] in METHODS else 'Network'
     while True:
-        zap_method = input("Channel change method: Guide (OK, OK, Down, OK) or ChUp "
-                           f"(default: {default_method}): ").strip() or default_method
-        zap_method = {'guide': 'Guide', 'chup': 'ChUp'}.get(zap_method.lower())
+        zap_method = input("Channel change method: Network (CH+/- over Wi-Fi), Guide (OK, OK, Down, OK) "
+                           f"or ChUp (IR) (default: {default_method}): ").strip() or default_method
+        zap_method = {m.lower(): m for m in METHODS}.get(zap_method.lower())
         if zap_method:
             break
-        print("Choose Guide or ChUp.")
+        print(f"Choose one of: {', '.join(METHODS)}.")
+    tv_ip, zap_direction = defaults['tv_ip'], defaults['zap_direction']
+    if zap_method == 'Network':
+        tv_ip = input(f"TV IP address (default: {defaults['tv_ip']}): ").strip() or defaults['tv_ip']
+        while True:
+            zap_direction = input("Channel direction: Up, Down, or Alternate "
+                                  f"(default: {defaults['zap_direction']}): ").strip() or defaults['zap_direction']
+            zap_direction = {d.lower(): d for d in ('Up', 'Down', 'Alternate')}.get(zap_direction.lower())
+            if zap_direction:
+                break
+            print("Choose Up, Down, or Alternate.")
 
     configuration = dict(defaults)
     configuration.update({
@@ -136,9 +153,12 @@ def get_user_configuration():
         'timeout': timeout,
         'zap_interval_seconds': zap_interval_seconds,
         'zap_method': zap_method,
+        'tv_ip': tv_ip,
+        'zap_direction': zap_direction,
     })
     print("\nConfiguration:")
-    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds', 'zap_method'):
+    for key in ('manufacturer', 'SoC', 'SWV', 'LGCV', 'num_runs', 'timeout', 'zap_interval_seconds', 'zap_method',
+                'tv_ip', 'zap_direction'):
         print(f"  {key}: {configuration[key]}")
     if configuration['route']:
         print(f"  saved route to {APP_NAME}: {', '.join(configuration['route'])}")
@@ -642,7 +662,7 @@ def calibrate_playback(configuration, camera, calibration_dir):
     """
     frame = wait_until_playing(camera, "Waiting for the channel to play.")
     cv2.imwrite(os.path.join(calibration_dir, "live_channel.jpg"), frame)
-    if configuration['zap_method'] == 'Guide':
+    if configuration['zap_method'] in ('Guide', 'Network'):
         roi = select_landing_area(configuration, camera, calibration_dir)
         configuration['stream_roi'] = roi
         save_configuration(CONFIG_FILE, configuration)
@@ -897,8 +917,11 @@ def select_landing_area(configuration, camera, calibration_dir):
     That area is black/empty until the full-screen picture lands, so a lasting change there is the landing.
     """
     print("\n[SETUP] One unmeasured channel change to choose the landing area.")
-    guide_keys(configuration, camera, "SETUP")
-    send_key('OK', configuration['manufacturer'])
+    if configuration['zap_method'] == 'Network':
+        NETWORK_REMOTE.send(channel_key(configuration, 0))
+    else:
+        guide_keys(configuration, camera, "SETUP")
+        send_key('OK', configuration['manufacturer'])
     print("[SETUP] Press ENTER in the camera window while the screen is black/loading (before the picture appears).")
     for _ in range(50):
         if cv2.waitKey(1) == -1:
@@ -1055,7 +1078,34 @@ def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_thresho
         frame_capture.stop()
 
 
+def channel_key(configuration, run_idx):
+    """KEY_CHUP / KEY_CHDOWN for this run (Alternate: Up on odd runs, Down on even runs)."""
+    direction = configuration['zap_direction']
+    if direction == 'Alternate':
+        direction = 'Down' if run_idx % 2 == 0 else 'Up'
+    return CHANNEL_KEYS[direction]
+
+
+def zap_by_network(configuration, camera, run_idx, output_dir, roi):
+    """Live TV playing: pre-roll, then CH+/CH- over the network starts the timer; stop at the landing."""
+    key = channel_key(configuration, run_idx)
+    frame_capture = CameraFrameCapture(camera)
+    frame_capture.start()
+    try:
+        pre_frames, _, _ = capture_pre_roll(frame_capture, roi)
+        frame_capture.clear_buffer()
+        print(f"[RUN {run_idx}] {key} over the network; the timer starts now.")
+        key_pressed_at = NETWORK_REMOTE.send(key)
+        winsound.Beep(1500, 300)
+        return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
+                               key_pressed_at, pre_frames)
+    finally:
+        frame_capture.stop()
+
+
 def zap_once(configuration, camera, run_idx, output_dir, roi, motion_threshold):
+    if configuration['zap_method'] == 'Network':
+        return zap_by_network(configuration, camera, run_idx, output_dir, roi)
     if configuration['zap_method'] == 'Guide':
         return zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold)
     frame_capture = CameraFrameCapture(camera)
@@ -1087,8 +1137,21 @@ def watch(camera, seconds, run_idx):
             raise KeyboardInterrupt("Measurement canceled by user.")
 
 
+def connect_network_remote(configuration):
+    """Network method: connect to the TV now (first time ever: press Allow on the TV) and show what it is."""
+    global NETWORK_REMOTE
+    NETWORK_REMOTE = NetworkRemote(configuration['tv_ip'])
+    model, name, power = NETWORK_REMOTE.info()
+    print(f"[TV] {configuration['tv_ip']}: {name} ({model}), power {power}")
+    print("[TV] Connecting to the remote API (if the TV asks, press Allow)...")
+    NETWORK_REMOTE.open()
+    print("[TV] Connected.")
+
+
 def main():
     configuration = get_user_configuration()
+    if configuration['zap_method'] == 'Network':
+        connect_network_remote(configuration)
     camera = None
 
     try:
@@ -1107,7 +1170,7 @@ def main():
 
         model = configuration['SoC']
         saved_navigation = configuration['navigation'].get(model)
-        expected_detector = 'landing_area' if configuration['zap_method'] == 'Guide' else 'motion'
+        expected_detector = 'landing_area' if configuration['zap_method'] in ('Guide', 'Network') else 'motion'
         if saved_navigation and saved_navigation.get('detector') != expected_detector:
             print(f"[SETUP] The saved navigation for {model} was made for another detection method; set it up again.")
             saved_navigation = None
@@ -1131,7 +1194,7 @@ def main():
                 'stream_roi': [int(v) for v in roi],
                 'motion_threshold': float(motion_threshold),
                 'zap_method': configuration['zap_method'],
-                'detector': 'landing_area' if configuration['zap_method'] == 'Guide' else 'motion',
+                'detector': 'landing_area' if configuration['zap_method'] in ('Guide', 'Network') else 'motion',
             }
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
@@ -1204,6 +1267,8 @@ def main():
         if camera is not None:
             camera.release()
         cv2.destroyAllWindows()
+        if NETWORK_REMOTE is not None:
+            NETWORK_REMOTE.close()
         wait_for_uploads()
 
 

@@ -5,3 +5,4 @@ pyserial
 python-kasa
 keyboard
 imageio-ffmpeg
+samsungtvws
