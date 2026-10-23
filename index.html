@@ -166,6 +166,7 @@
     <label>Session<select id="f-Session"></select></label>
     <label>TV maker<select id="f-Manufacturer"></select></label>
     <label>Service<select id="f-Service"></select></label>
+    <label>Case<select id="f-Case"></select></label>
     <label>SoC<select id="f-SoC"></select></label>
     <label>SW Version<select id="f-SWV"></select></label>
     <label>LG CV Version<select id="f-LGCV"></select></label>
@@ -174,6 +175,7 @@
     <label>Compare by<select id="compare">
       <option value="build">Build</option>
       <option value="maker">TV maker</option>
+      <option value="case">Case (player)</option>
     </select></label>
     <label class="check"><input type="checkbox" id="show-excluded" checked> Show excluded rows</label>
   </div>
@@ -197,7 +199,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b17</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b18</p>
 </div>
 
 <dialog id="player">
@@ -210,7 +212,7 @@
 
 <script>
 const REFRESH_MS = 30000;
-const FILTER_KEYS = ['Session', 'Manufacturer', 'Service', 'SoC', 'SWV', 'LGCV', 'Status'];
+const FILTER_KEYS = ['Session', 'Manufacturer', 'Service', 'Case', 'SoC', 'SWV', 'LGCV', 'Status'];
 const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
@@ -236,7 +238,7 @@ function setLocalView(on) {
 // What each TC measures, shown under the title for the selected tab.
 const TC_DEFINITIONS = {
   Omedia_TC01: 'Home screen wake time from the Power ON IR send (TV off for Standby_Seconds before). <b>Home_Time_ms</b>: the TV screen matches the Home reference (<code>TM_CCOEFF_NORMED</code> similarity threshold). <b>Settle_Time_ms</b>: Home has appeared and the screen stays still for 1 s (Hisense runs).',
-  Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA TV Channel: IR CH+/CH-) until the full-screen picture lands (an area that is empty while loading gets filled).',
+  Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA TV Channel and LG Channels: IR CH+/CH-; LG Case = player before → after, Pluto TV channels use the MSE player, others Native) until the full-screen picture lands (an area that is empty while loading gets filled).',
 };
 function renderDefinition() {
   document.getElementById('definition').innerHTML = TC_DEFINITIONS[state.tc] || '';
@@ -261,7 +263,9 @@ function buildKey(r) {
 // Series for the charts: the build (with its TV maker), or only the TV maker when comparing makers.
 function groupKey(r) {
   const maker = [r.Manufacturer, r.Service].filter(Boolean).join(' · ');
-  if (document.getElementById('compare').value === 'maker') return maker || 'Unknown maker';
+  const mode = document.getElementById('compare').value;
+  if (mode === 'maker') return maker || 'Unknown maker';
+  if (mode === 'case') return r.Case ? `${r.Manufacturer || ''} · ${r.Case}`.replace(/^ · /, '') : (maker || 'No case');
   return maker ? `${maker} · ${buildKey(r)}` : buildKey(r);
 }
 function rowId(r) { return state.tc + '|' + r.Row_ID; }
@@ -570,7 +574,7 @@ function renderBuilds(statRows, metric) {
   const box = document.getElementById('builds');
   const groups = {};
   document.getElementById('builds-title').textContent =
-    document.getElementById('compare').value === 'maker' ? 'Average by TV maker' : 'Average by Build';
+    ({ maker: 'Average by TV maker', case: 'Average by Case' })[document.getElementById('compare').value] || 'Average by Build';
   statRows.forEach(r => { const v = num(r[metric]); if (v != null) (groups[groupKey(r)] = groups[groupKey(r)] || []).push(v); });
   const entries = Object.entries(groups).map(([b, vs]) => [b, stats(vs), vs.length]);
   if (!entries.length) { box.innerHTML = '<div class="empty">No passing runs in this range</div>'; return; }
@@ -618,7 +622,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
   document.getElementById('row-count').textContent = `(${rows.length} shown · ${excludedCount} excluded)`;
   if (!rows.length) { table.innerHTML = '<tr><td class="empty">No runs in this range</td></tr>'; return; }
 
-  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Recording', 'Session', 'Manufacturer', 'Service', 'SoC', 'SWV', 'LGCV'];
+  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Recording', 'Session', 'Manufacturer', 'Service', 'Case', 'From_Ch', 'To_Ch', 'SoC', 'SWV', 'LGCV'];
   const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k));
   if (rows.some(r => r.Video || r.GIF)) keys.push('Recording');
   const columns = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
