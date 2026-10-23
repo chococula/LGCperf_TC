@@ -55,6 +55,7 @@ DEFAULT_CONFIGURATION = {
     'navigation': {},            # per SoC: the setup that worked (route, plan_steps, stream_roi, motion_threshold)
     'stream_roi': [],
     'motion_threshold': 0.0,
+    'screen_rois': {},           # per SoC: [x, y, w, h] of the TV screen; black is judged on the whole screen
 }
 
 FLIRC_UTIL_PATH = r"C:\Program Files (x86)\Flirc\flirc_util.exe"
@@ -94,6 +95,18 @@ QUIET_FRAMES = 9                # ~0.3 s without change after the GUIDE closed =
 PERSIST_SECONDS = 0.5           # the landed picture must stay different from the loading screen this long
 NO_GUIDE_CHANGE_MS = 3000       # if the area never changed when the GUIDE closed, start waiting anyway
 LOADING_DARK = 60               # area brightness below this = the old picture went black (loading screen)
+# Black screen of a CH+/CH- change, judged on the whole TV screen: a sudden drop below BLACK_SCREEN, to under
+# BLACK_RATIO of and BLACK_DROP below the brightest frame of the last BLACK_WINDOW_MS (LG: black 2-53,
+# playing pictures 55-190). Checked on the LG NU7000 session of 2026-10-22 16:25: it is the first dark frame
+# before every correct landing, and comes after every early (wrong) one.
+BLACK_SCREEN = 60
+BLACK_RATIO = 0.7
+BLACK_DROP = 15
+BLACK_WINDOW_MS = 200
+LANDING_PATTERN = 20            # the landing must also change the area's pattern this much (mean removed):
+                                # LG 2026-10-22 real landings 24-81; loading screen brightening / Pluto logo 9-16
+MIN_REACTION_MS = 300          # the TV does not react faster; darkness before this is the old channel
+BLACK_OLD_DARK = 40             # old channel darker than this: black cannot be told apart, not required
 ONSET_STEP = 8                  # the landing time is the first frame that moved this far from the loading screen
 STEP_LOAD_SECONDS = 6           # saved navigation: wait after each OK for the next screen to load
 HOME_SETTLE_SECONDS = 3
@@ -708,6 +721,24 @@ def calibrate_playback(configuration, camera, calibration_dir):
     return roi, threshold
 
 
+def confirm_live_tv_ready(camera):
+    """Before the first channel change: the user confirms Live TV is playing (ENTER) or cancels (Q)."""
+    print("[READY] Is Live TV playing and ready for the first channel change? "
+          "Press ENTER in the camera window to start, Q to cancel.")
+    while True:
+        frame = read_frame(camera)
+        if frame is not None:
+            cv2.imshow(CAPTURE_WINDOW, draw_overlay(frame, [
+                ("Is Live TV playing and ready?", (0, 255, 255), 1.0),
+                ("ENTER = start measuring,  Q = cancel", (255, 255, 255), 0.8)]))
+        key = cv2.waitKey(30) & 0xFF
+        if key in (13, 10):
+            print("[READY] Confirmed; starting the measurement.")
+            return
+        if key in (ord('q'), ord('Q')):
+            raise KeyboardInterrupt("Canceled before the first channel change.")
+
+
 def show_for(camera, seconds, label):
     end = time.perf_counter() + seconds
     while time.perf_counter() < end:
@@ -941,6 +972,51 @@ def guide_keys(configuration, camera, label):
             cv2.waitKey(1)
 
 
+def pattern_change(area, reference):
+    """Change of the picture inside the area with each one's mean brightness removed.
+
+    A landed picture brings new shapes; a loading screen whose backlight brightens (or a logo screen
+    behind the area) only lifts the same room reflections, which this ignores.
+    """
+    return float(np.mean(np.abs((area - area.mean()) - (reference - reference.mean()))))
+
+
+def screen_brightness(frame, screen_roi):
+    """Mean gray level of the TV screen (blurred), used to see the black screen of a channel change."""
+    x, y, w, h = screen_roi
+    return float(cv2.GaussianBlur(cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY), (9, 9), 0).mean())
+
+
+def screen_area(configuration, camera, calibration_dir):
+    """The TV screen in the camera view, saved per SoC; the user drags it once."""
+    saved = configuration['screen_rois'].get(configuration['SoC'])
+    if saved:
+        print(f"[SETUP] Using the saved TV screen area for {configuration['SoC']}: {saved}")
+        return saved
+    frame = None
+    while frame is None:
+        frame = read_frame(camera)
+    window_name = "Select the TV screen"
+    while True:
+        print("[SETUP] Drag a box around the whole TV screen (picture area only, not the wall), then press Enter.")
+        preview = draw_overlay(frame.copy(), [("Drag around the WHOLE TV screen, then ENTER", (0, 255, 0), 1.0)])
+        x, y, w, h = (int(v) for v in cv2.selectROI(window_name, preview, showCrosshair=False, fromCenter=False))
+        cv2.destroyWindow(window_name)
+        if w * h > 0.85 * frame.shape[0] * frame.shape[1]:
+            print("[SETUP] The box covers almost the whole camera view; drag around the TV screen only "
+                  "(the lit wall around it hides the black screen).")
+        elif w >= 60 and h >= 40:
+            break
+        else:
+            print("[SETUP] The box is too small; drag around the whole TV screen.")
+    configuration['screen_rois'][configuration['SoC']] = [x, y, w, h]
+    save_configuration(CONFIG_FILE, configuration)
+    marked = frame.copy()
+    cv2.rectangle(marked, (x, y), (x + w, y + h), (0, 255, 255), 2)
+    cv2.imwrite(os.path.join(calibration_dir, "screen_area.jpg"), marked)
+    return [x, y, w, h]
+
+
 def select_landing_area(configuration, camera, calibration_dir):
     """One unmeasured channel change; the user drags an area that is empty (black) while it loads.
 
@@ -982,17 +1058,35 @@ def select_landing_area(configuration, camera, calibration_dir):
         print("[SETUP] The box is too small; drag a larger area.")
 
 
-def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_pressed_at, pre_frames=()):
+def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_pressed_at, pre_frames=(),
+                    require_black=False, screen_roi=None):
     """Time from OK until the full-screen picture lands, judged in an area that is empty while loading.
 
     Phases: 'closing' (the GUIDE disappears: the area changes once, then goes quiet), 'loading' (quiet),
     then the first large change that lasts PERSIST_SECONDS is the landing; its first frame is the time.
+    require_black (CH+/CH-): nothing counts until the screen has gone black, so movement of the old channel
+    before the black screen can never be taken as the new one. With screen_roi the whole TV screen is
+    judged (the landing area may sit in a dark part of the old picture); otherwise the landing area.
     """
     x, y, w, h = roi
     # (elapsed_ms, area) for the last STEP_FRAMES frames
     history = [((captured_at - key_pressed_at) * 1000.0, region_small(frame, roi))
                for captured_at, frame, _ in list(pre_frames)[-STEP_FRAMES:]]
     phase, seen_change, quiet = 'closing', False, 0
+    # Brightness of the old channel before the key: the whole screen when known, else the landing area.
+    def darkness(frame, area):
+        return screen_brightness(frame, screen_roi) if screen_roi else float(area.mean())
+    pre_list = list(pre_frames)[-STEP_FRAMES:]
+    # (elapsed_ms, brightness) of recent frames: the black screen is a sudden drop against these
+    levels = [((captured_at - key_pressed_at) * 1000.0, darkness(frame, region_small(frame, roi)))
+              for captured_at, frame, _ in pre_list]
+    before = float(np.mean([level for _, level in levels])) if levels else None   # None: no pre-roll
+    black_level = BLACK_SCREEN if screen_roi else LOADING_DARK
+    old_dark = BLACK_OLD_DARK if screen_roi else LOADING_DARK + ARM_STEP
+    black_seen = True
+    loading_ref, loading_min = None, float('inf')   # darkest area of the loading screen (after the black)
+    if require_black:
+        black_seen, phase = False, 'waiting for black'
     candidate = None                 # (elapsed_ms, area before the change)
     detected, detected_elapsed_ms, stop_at_ms, result_saved = False, None, None, False
     frame_count, last_elapsed_ms = 0, 0.0
@@ -1033,7 +1127,33 @@ def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_presse
             history = history[-STEP_FRAMES:]
 
             if not detected:
-                if phase == 'closing':
+                if loading_ref is not None and candidate is None:
+                    # The darkest frame of the loading screen is what the landed picture is compared with.
+                    level = darkness(frame, current)
+                    if level < loading_min:
+                        loading_ref, loading_min = current, level
+                if not black_seen:
+                    level = darkness(frame, current)
+                    if before is None:
+                        before = level
+                    recent = [lv for t, lv in levels if elapsed_ms - BLACK_WINDOW_MS <= t < elapsed_ms]
+                    levels = (levels + [(elapsed_ms, level)])[-30:]
+                    top = max(recent) if recent else before
+                    if before < old_dark:
+                        # The old picture is already about as dark as the black screen: it cannot be told
+                        # apart, so the black screen is not required for this run.
+                        print(f"[RUN {run_idx}] The old picture is already dark ({before:.0f}); "
+                              "the black screen is not required for this run.")
+                        black_seen, phase = True, 'closing'
+                    elif (elapsed_ms >= MIN_REACTION_MS and level < black_level
+                          and level < top * BLACK_RATIO and level < top - BLACK_DROP):
+                        # A sudden drop to dark: the old channel is gone (a dark scene cut of the old
+                        # channel right at the key is not the TV's reaction, hence MIN_REACTION_MS).
+                        # The old channel is gone: compare the landing against the black screen from here.
+                        black_seen, phase = True, 'loading'
+                        history, candidate = [(elapsed_ms, current)], None
+                        loading_ref, loading_min = current, level
+                elif phase == 'closing':
                     if step >= ARM_STEP:
                         seen_change, quiet = True, 0
                     elif seen_change or elapsed_ms > NO_GUIDE_CHANGE_MS:
@@ -1052,7 +1172,9 @@ def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_presse
                                      if float(np.mean(np.abs(area - reference))) >= ONSET_STEP)
                         candidate = (onset, reference)
                 elif elapsed_ms - candidate[0] >= PERSIST_SECONDS * 1000.0:
-                    if float(np.mean(np.abs(current - candidate[1]))) >= LANDING_STEP * 0.6:
+                    if (float(np.mean(np.abs(current - candidate[1]))) >= LANDING_STEP * 0.6
+                            and pattern_change(current, candidate[1] if loading_ref is None else loading_ref)
+                            >= LANDING_PATTERN):
                         detected, detected_elapsed_ms = True, candidate[0]
                         stop_at_ms = elapsed_ms + STREAM_EXTRA_SECONDS * 1000.0
                         print(f"[RUN {run_idx}] Landed at {detected_elapsed_ms:.2f} ms.")
@@ -1085,7 +1207,8 @@ def measure_landing(frame_capture, roi, run_idx, output_dir, timeout, key_presse
         print(f"[RUN {run_idx}] Saved {frame_writer.saved} frames to {frame_writer.frames_dir}")
 
     if not detected:
-        print(f"[RUN {run_idx}] No landing within {timeout:g} seconds.")
+        print(f"[RUN {run_idx}] No landing within {timeout:g} seconds."
+              + ("" if black_seen else " The area never went black (did the channel change?)."))
         winsound.Beep(400, 700)
     return {
         'run': run_idx,
@@ -1114,8 +1237,10 @@ def measure_after_key(configuration, frame_capture, roi, motion_threshold, run_i
     if motion:
         return measure_zap_time(frame_capture, roi, motion_threshold, run_idx, output_dir, configuration['timeout'],
                                 key_pressed_at, pre_frames, last_roi, key_label=key_label)
+    # CH+/CH- (IR or network): the old channel goes black first; the GUIDE (OK) closes without black.
     return measure_landing(frame_capture, roi, run_idx, output_dir, configuration['timeout'],
-                           key_pressed_at, pre_frames)
+                           key_pressed_at, pre_frames, require_black=configuration['zap_method'] != 'Guide',
+                           screen_roi=configuration['screen_rois'].get(configuration['SoC']))
 
 
 def zap_by_guide(configuration, camera, run_idx, output_dir, roi, motion_threshold):
@@ -1259,6 +1384,9 @@ def main():
             save_configuration(CONFIG_FILE, configuration)
             print(f"[SETUP] Saved the navigation for {model}; next time it can run without clicks.")
 
+        if configuration['zap_method'] != 'Guide':
+            screen_area(configuration, camera, calibration_dir)     # black is judged on the whole TV screen
+        confirm_live_tv_ready(camera)
         results = []
         for run_idx in range(1, configuration['num_runs'] + 1):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
