@@ -1,6 +1,7 @@
 """Capture a whole remote's IR keymap with the Flirc USB receiver, one button at a time.
 
-Run:  python ir_capture.py Hisense
+Run:  python ir_capture.py Hisense            (all keys)
+      python ir_capture.py LG Input           (only the named keys; keys already in ir_keys.py are kept)
 A window shows which button to press, flashes when the Flirc receives IR (green = key signal,
 orange = too weak / noise), and confirms each button with two matching presses.
 S skips a button the remote does not have, R redoes the current key, B goes back, Q finishes. Results are written to
@@ -31,8 +32,25 @@ MAX_TIMING_US = 20000      # longer marks/spaces are idle gaps between presses (
 KEYMAP = [
     ('Power', 'Power'), ('Home', 'Home'), ('Back', 'Back / Return'), ('OK', 'OK / Enter'),
     ('Up', 'Up'), ('Down', 'Down'), ('Left', 'Left'), ('Right', 'Right'),
-    ('ChUp', 'CH +'), ('ChDown', 'CH -'),
+    ('ChUp', 'CH +'), ('ChDown', 'CH -'), ('Input', 'Input (source)'),
 ]
+
+
+def keys_to_capture(names):
+    """KEYMAP, or only the named keys (python ir_capture.py LG Input); unknown names are captured as given."""
+    if not names:
+        return KEYMAP
+    known = {key.lower(): (key, label) for key, label in KEYMAP}
+    return [known.get(name.lower(), (name, name)) for name in names]
+
+
+def existing_keys(brand):
+    """The <BRAND>_KEYS already in ir_keys.py, so a capture adds to them instead of replacing them."""
+    try:
+        import ir_keys
+        return dict(getattr(ir_keys, f"{brand.upper()}_KEYS", {}))
+    except ImportError:
+        return {}
 
 
 class FlircReceiver:
@@ -237,8 +255,14 @@ def draw_screen(brand, index, label, step, message, message_color, activity, key
 
 def main():
     brand = sys.argv[1] if len(sys.argv) > 1 else input("Remote brand (e.g. Hisense): ").strip() or 'Hisense'
+    global KEYMAP
+    KEYMAP = keys_to_capture(sys.argv[2:])          # the screen and the loop walk through these keys
     json_path = os.path.join(SCRIPT_DIR, f"ir_keys_{brand.lower()}.json")
-    keys = json.load(open(json_path, encoding='utf-8')) if os.path.exists(json_path) else {}
+    keys = existing_keys(brand)
+    if os.path.exists(json_path):
+        keys.update(json.load(open(json_path, encoding='utf-8')))
+    if keys:
+        print(f"{brand}: {len(keys)} keys already saved ({', '.join(keys)}); they are kept.")
     skipped = set()
     receiver = FlircReceiver(os.path.join(SCRIPT_DIR, f"ir_capture_{brand.lower()}_raw.log"))
     time.sleep(1.0)
