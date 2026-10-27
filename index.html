@@ -206,7 +206,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b23</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b24</p>
 </div>
 
 <dialog id="player">
@@ -219,8 +219,8 @@
 
 <script>
 const REFRESH_MS = 30000;
-const FILTER_KEYS = ['Manufacturer', 'Service', 'Case', 'SoC', 'SWV', 'LGCV', 'Status'];
-const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC', 'Session'];
+const FILTER_KEYS = ['Manufacturer', 'Service', 'Case', 'SoC', 'SWV', 'LGCV'];
+const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC', 'Session', 'Status'];
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
@@ -649,7 +649,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
   document.getElementById('row-count').textContent = `(${rows.length} shown · ${excludedCount} excluded)`;
   if (!rows.length) { table.innerHTML = '<tr><td class="empty">No runs in this range</td></tr>'; return; }
 
-  const preferred = ['Timestamp', 'Run', 'Status', metric, 'Recording', 'Manufacturer', 'Service', 'Case', 'From_Ch', 'To_Ch', 'SoC', 'SWV', 'LGCV'];
+  const preferred = ['Timestamp', 'Run', metric, 'Recording', 'Manufacturer', 'Service', 'Case', 'From_Ch', 'To_Ch', 'SoC', 'SWV', 'LGCV'];
   const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k));
   if (rows.some(r => r.Video || r.GIF)) keys.push('Recording');
   const columns = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
