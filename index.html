@@ -3,7 +3,7 @@
 <head>
 <base target="_top">
 <meta charset="utf-8">
-<title>US R&amp;D OMDIA Perf Result</title>
+<title>LG US R&amp;D webOS Perf Result</title>
 <script src="config.js"></script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -142,7 +142,7 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>US R&amp;D OMDIA Perf Result</h1>
+      <h1>LG US R&amp;D webOS Perf Result</h1>
       <p class="definition" id="definition"></p>
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
@@ -199,7 +199,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-22 b19</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b20</p>
 </div>
 
 <dialog id="player">
@@ -238,7 +238,7 @@ function setLocalView(on) {
 // What each TC measures, shown under the title for the selected tab.
 const TC_DEFINITIONS = {
   Omedia_TC01: 'Home screen wake time from the Power ON IR send (TV off for Standby_Seconds before). <b>Home_Time_ms</b>: the TV screen matches the Home reference (<code>TM_CCOEFF_NORMED</code> similarity threshold). <b>Settle_Time_ms</b>: Home has appeared and the screen stays still for 1 s (Hisense runs).',
-  Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA TV Channel and LG Channels: IR CH+/CH-; LG Case = player before → after (Native → Native, Native → Pluto, Pluto → Pluto), Pluto TV channels use the MSE player, others Native) until the full-screen picture lands (an area that is empty while loading gets filled).',
+  Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA TV Channel and LG Channels: IR CH+/CH-; LG Case = player before → after: LGC_LiveTV (NtN) Native → Native, (NtP) Native → Pluto, (PtP) Pluto → Pluto; Pluto TV channels use the MSE player, others Native) until the full-screen picture lands (an area that is empty while loading gets filled).',
 };
 function renderDefinition() {
   document.getElementById('definition').innerHTML = TC_DEFINITIONS[state.tc] || '';
@@ -264,10 +264,10 @@ function buildKey(r) {
 // Rows with a Case (LG: player before -> after) are always split into their cases, in every view.
 function groupKey(r) {
   const maker = [r.Manufacturer, r.Service].filter(Boolean).join(' · ');
-  const withCase = label => r.Case ? `${label} · ${r.Case}` : label;
+  const withCase = label => r.Case ? `${r.Case} · ${buildKey(r)}` : label;
   const mode = document.getElementById('compare').value;
-  if (mode === 'maker') return withCase(maker || 'Unknown maker');
-  if (mode === 'case') return r.Case ? `${r.Manufacturer || ''} · ${r.Case}`.replace(/^ · /, '') : (maker || 'No case');
+  if (mode === 'maker') return r.Case || maker || 'Unknown maker';
+  if (mode === 'case') return r.Case || maker || 'No case';
   return withCase(maker ? `${maker} · ${buildKey(r)}` : buildKey(r));
 }
 function rowId(r) { return state.tc + '|' + r.Row_ID; }
