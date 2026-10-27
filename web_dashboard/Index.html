@@ -206,7 +206,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b24</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b25</p>
 </div>
 
 <dialog id="player">
@@ -221,6 +221,9 @@
 const REFRESH_MS = 30000;
 const FILTER_KEYS = ['Manufacturer', 'Service', 'Case', 'SoC', 'SWV', 'LGCV'];
 const HIDDEN_COLUMNS = ['Row_ID', 'Excluded', 'Excluded_At', 'Uploaded_At', 'Video', 'GIF', 'TC', 'Session', 'Status'];
+// Hidden on one tab only (the data stays; Case still names the series on the chart).
+const TC_HIDDEN = { Omedia_TC01: ['Case'] };
+const hiddenHere = key => (TC_HIDDEN[state.tc] || []).includes(key);
 const OUTLIER_MIN_FRACTION = 0.15;
 const SERIES_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'];
 const KEY_STORAGE = 'lgcperf-admin-key';
@@ -446,7 +449,7 @@ function rowsForTc() { return state.tc ? state.data[state.tc] : []; }
 function renderFilters() {
   const rows = rowsForTc();
   const box = document.getElementById('facets');
-  box.innerHTML = FILTER_KEYS.map(key => {
+  box.innerHTML = FILTER_KEYS.filter(key => !hiddenHere(key)).map(key => {
     const options = [...new Set(rows.map(r => r[key]).filter(Boolean))].sort();
     if (key === 'Session') options.reverse();
     if (!options.length) return '';
@@ -496,7 +499,7 @@ function filteredRows() {
     const day = dayOf(r);
     if (from && day < from) return false;
     if (to && day > to) return false;
-    return FILTER_KEYS.every(key => !offSet(key).has(r[key]));
+    return FILTER_KEYS.every(key => hiddenHere(key) || !offSet(key).has(r[key]));
   });
 }
 
@@ -650,7 +653,7 @@ function renderTable(rows, metric, outliers, excludedCount) {
   if (!rows.length) { table.innerHTML = '<tr><td class="empty">No runs in this range</td></tr>'; return; }
 
   const preferred = ['Timestamp', 'Run', metric, 'Recording', 'Manufacturer', 'Service', 'Case', 'From_Ch', 'To_Ch', 'SoC', 'SWV', 'LGCV'];
-  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k));
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].filter(k => !HIDDEN_COLUMNS.includes(k) && !hiddenHere(k));
   if (rows.some(r => r.Video || r.GIF)) keys.push('Recording');
   const columns = preferred.filter(k => keys.includes(k)).concat(keys.filter(k => !preferred.includes(k)));
   const head = '<tr>' + columns.map(c => `<th>${esc(c)}</th>`).join('') + (state.adminKey ? '<th>Action</th>' : '') + '</tr>';
