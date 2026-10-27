@@ -1,5 +1,5 @@
 {
- "publishedAt": "2026-10-27T18:47:40+00:00",
+ "publishedAt": "2026-10-27T19:16:10+00:00",
  "data": {
   "Omedia_TC01": [
    {
@@ -638,6 +638,86 @@
     "Row_ID": "pub-tc02-lg-1026-29",
     "Video": "media/Omedia_TC02_29_20261026_122447_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
     "GIF": "media/Omedia_TC02_29_20261026_122447_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "1",
+    "Timestamp": "20261022_162525",
+    "Zap_Time_ms": "7372.61",
+    "Frames": "267",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_01_20261022_162525_NU7000_SWV43.21.61_LGCV4.1.14",
+    "Session": "20261022_1625",
+    "Manufacturer": "LG",
+    "Service": "LG Channels",
+    "Case": "LGC O&O App",
+    "Row_ID": "pub-tc02-lgc-oo-1625-1",
+    "Video": "media/Omedia_TC02_01_20261022_162525_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
+    "GIF": "media/Omedia_TC02_01_20261022_162525_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "2",
+    "Timestamp": "20261022_162552",
+    "Zap_Time_ms": "7180.36",
+    "Frames": "261",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_02_20261022_162552_NU7000_SWV43.21.61_LGCV4.1.14",
+    "Session": "20261022_1625",
+    "Manufacturer": "LG",
+    "Service": "LG Channels",
+    "Case": "LGC O&O App",
+    "Row_ID": "pub-tc02-lgc-oo-1625-2",
+    "Video": "media/Omedia_TC02_02_20261022_162552_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
+    "GIF": "media/Omedia_TC02_02_20261022_162552_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "3",
+    "Timestamp": "20261022_162618",
+    "Zap_Time_ms": "4893.21",
+    "Frames": "184",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_03_20261022_162618_NU7000_SWV43.21.61_LGCV4.1.14",
+    "Session": "20261022_1625",
+    "Manufacturer": "LG",
+    "Service": "LG Channels",
+    "Case": "LGC O&O App",
+    "Row_ID": "pub-tc02-lgc-oo-1625-3",
+    "Video": "media/Omedia_TC02_03_20261022_162618_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
+    "GIF": "media/Omedia_TC02_03_20261022_162618_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "4",
+    "Timestamp": "20261022_162640",
+    "Zap_Time_ms": "4205.78",
+    "Frames": "172",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_04_20261022_162640_NU7000_SWV43.21.61_LGCV4.1.14",
+    "Session": "20261022_1625",
+    "Manufacturer": "LG",
+    "Service": "LG Channels",
+    "Case": "LGC O&O App",
+    "Row_ID": "pub-tc02-lgc-oo-1625-4",
+    "Video": "media/Omedia_TC02_04_20261022_162640_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
+    "GIF": "media/Omedia_TC02_04_20261022_162640_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+   },
+   {
+    "TC": "Omedia_TC02",
+    "Run": "5",
+    "Timestamp": "20261022_162700",
+    "Zap_Time_ms": "4731.1",
+    "Frames": "188",
+    "Status": "PASS",
+    "Directory": "C:/Temp\\Omedia_TC02_05_20261022_162700_NU7000_SWV43.21.61_LGCV4.1.14",
+    "Session": "20261022_1625",
+    "Manufacturer": "LG",
+    "Service": "LG Channels",
+    "Case": "LGC O&O App",
+    "Row_ID": "pub-tc02-lgc-oo-1625-5",
+    "Video": "media/Omedia_TC02_05_20261022_162700_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
+    "GIF": "media/Omedia_TC02_05_20261022_162700_NU7000_SWV43.21.61_LGCV4.1.14.gif"
    }
   ]
  }
