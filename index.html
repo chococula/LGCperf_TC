@@ -57,6 +57,19 @@
                    letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
   select { font: 13px var(--font-body); padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
            background: var(--panel); color: var(--text); min-width: 130px; text-transform: none; letter-spacing: 0; }
+  .facets { display: grid; gap: 8px; }
+  .facet { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  .facet-name { width: 110px; flex: none; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+                text-transform: uppercase; color: var(--muted); }
+  .fchip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--line);
+          border-radius: 999px; background: var(--panel); color: var(--text); font: 13px var(--font-body);
+          cursor: pointer; user-select: none; }
+  .fchip input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+  .fchip .n { font: 11px var(--font-mono); color: var(--muted); }
+  .fchip.off { color: var(--muted); background: transparent; border-style: dashed; }
+  .fchip:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .facet .all { font: 500 12px var(--font-body); padding: 3px 10px; }
+  @media (max-width: 600px) { .facet-name { width: 100%; } }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
            background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   .card { padding: 12px 16px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
@@ -163,14 +176,6 @@
       <button class="btn" data-range="30">30 days</button>
       <button class="btn" data-range="all">All</button>
     </div>
-    <label>Session<select id="f-Session"></select></label>
-    <label>TV maker<select id="f-Manufacturer"></select></label>
-    <label>Service<select id="f-Service"></select></label>
-    <label>Case<select id="f-Case"></select></label>
-    <label>SoC<select id="f-SoC"></select></label>
-    <label>SW Version<select id="f-SWV"></select></label>
-    <label>LG CV Version<select id="f-LGCV"></select></label>
-    <label>Status<select id="f-Status"></select></label>
     <label>Metric<select id="metric"></select></label>
     <label>Compare by<select id="compare">
       <option value="build">Build</option>
@@ -179,6 +184,8 @@
     </select></label>
     <label class="check"><input type="checkbox" id="show-excluded" checked> Show excluded rows</label>
   </div>
+
+  <div class="facets" id="facets" aria-label="Filters"></div>
 
   <div class="cards" id="cards"></div>
 
@@ -199,7 +206,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b20</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b21</p>
 </div>
 
 <dialog id="player">
@@ -246,7 +253,7 @@ function renderDefinition() {
 function sharedLocal() {
   try { const value = JSON.parse(localStorage.getItem(SHARED_KEY)); return value && value.data ? value : null; } catch (e) { return null; }
 }
-const state = { data: {}, tc: null, metric: null, seen: new Set(), firstLoad: true,
+const state = { off: {}, data: {}, tc: null, metric: null, seen: new Set(), firstLoad: true,
                 adminKey: null, editingRow: null, error: '' };
 
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -427,18 +434,37 @@ function renderTabs(tcs) {
   });
 }
 
+const FACET_NAMES = { Session: 'Session', Manufacturer: 'TV maker', Service: 'Service', Case: 'Case', SoC: 'SoC',
+                      SWV: 'SW Version', LGCV: 'LG CV Version', Status: 'Status' };
+// Values the user unticked, per tab and filter; everything is ticked at first.
+function offSet(key) { const k = state.tc + '|' + key; return (state.off[k] = state.off[k] || new Set()); }
+
 function rowsForTc() { return state.tc ? state.data[state.tc] : []; }
 
 function renderFilters() {
   const rows = rowsForTc();
-  FILTER_KEYS.forEach(key => {
-    const select = document.getElementById('f-' + key);
-    const current = select.value;
+  const box = document.getElementById('facets');
+  box.innerHTML = FILTER_KEYS.map(key => {
     const options = [...new Set(rows.map(r => r[key]).filter(Boolean))].sort();
     if (key === 'Session') options.reverse();
-    select.innerHTML = '<option value="">All</option>' + options.map(o => `<option>${esc(o)}</option>`).join('');
-    select.value = options.includes(current) ? current : '';
-    select.onchange = render;
+    if (!options.length) return '';
+    const off = offSet(key);
+    const chips = options.map(o => {
+      const n = rows.filter(r => r[key] === o).length;
+      return `<label class="fchip${off.has(o) ? ' off' : ''}"><input type="checkbox" data-key="${esc(key)}" ` +
+             `value="${esc(o)}"${off.has(o) ? '' : ' checked'}>${esc(o)}<span class="n">${n}</span></label>`;
+    }).join('');
+    const all = off.size ? `<button class="btn all" data-all="${esc(key)}">All</button>` : '';
+    return `<div class="facet"><span class="facet-name">${FACET_NAMES[key] || key}</span>${chips}${all}</div>`;
+  }).join('');
+  box.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.onchange = () => {
+    const off = offSet(cb.dataset.key);
+    if (cb.checked) off.delete(cb.value); else off.add(cb.value);
+    renderFilters(); render();
+  });
+  box.querySelectorAll('[data-all]').forEach(button => button.onclick = () => {
+    offSet(button.dataset.all).clear();
+    renderFilters(); render();
   });
 
   const metricSelect = document.getElementById('metric');
@@ -468,10 +494,7 @@ function filteredRows() {
     const day = dayOf(r);
     if (from && day < from) return false;
     if (to && day > to) return false;
-    return FILTER_KEYS.every(key => {
-      const value = document.getElementById('f-' + key).value;
-      return !value || r[key] === value;
-    });
+    return FILTER_KEYS.every(key => !offSet(key).has(r[key]));
   });
 }
 
