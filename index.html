@@ -206,7 +206,7 @@
     <p class="muted" style="margin:-6px 0 10px;font-size:12px">Statistics use PASS runs that are not excluded. INVALID means the TV was not off before Power ON, so the run was not measured. Excluded rows stay in the sheet and can be restored. <span class="chip" style="margin:0">Outlier?</span> marks a value more than 15% away from its build's median (at least 5 runs per build); it is a hint only.</p>
     <div class="table-wrap"><table id="table"></table></div>
   </div>
-  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b22</p>
+  <p class="muted" style="font-size:11px;margin:0">Build 2026-10-27 b23</p>
 </div>
 
 <dialog id="player">
@@ -243,6 +243,8 @@ function setLocalView(on) {
   if (!on && location.search) history.replaceState(null, '', location.pathname);
 }
 // What each TC measures, shown under the title for the selected tab.
+// Tab names shown on the site; the data keeps the TC names the scripts upload with.
+const TC_LABELS = { Omedia_TC01: 'Home Launch', Omedia_TC02: 'Ch Zapping' };
 const TC_DEFINITIONS = {
   Omedia_TC01: 'Home screen wake time from the Power ON IR send (TV off for Standby_Seconds before). <b>Home_Time_ms</b>: the TV screen matches the Home reference (<code>TM_CCOEFF_NORMED</code> similarity threshold). <b>Settle_Time_ms</b>: Home has appeared and the screen stays still for 1 s (Hisense runs).',
   Omedia_TC02: 'Live TV channel change: from the key that changes the channel (Samsung TV Plus: OK on the next channel in the GUIDE; Hisense VIDAA TV Channel and LG Channels: IR CH+/CH-; LG Case = player before → after: LGC_LiveTV (NtN) Native → Native, (NtP) Native → Pluto, (PtP) Pluto → Pluto; Pluto TV channels use the MSE player, others Native) until the full-screen picture lands (an area that is empty while loading gets filled).',
@@ -426,7 +428,7 @@ function renderTabs(tcs) {
   renderDefinition();
   const box = document.getElementById('tabs');
   box.innerHTML = tcs.map(tc =>
-    `<button class="tab ${tc === state.tc ? 'active' : ''}" data-tc="${esc(tc)}">${esc(tc)}<span class="muted">${state.data[tc].length}</span></button>`
+    `<button class="tab ${tc === state.tc ? 'active' : ''}" data-tc="${esc(tc)}">${esc(TC_LABELS[tc] || tc)}<span class="muted">${state.data[tc].length}</span></button>`
   ).join('');
   box.querySelectorAll('.tab').forEach(button => button.onclick = () => {
     state.tc = button.dataset.tc; state.metric = null; state.editingRow = null;
