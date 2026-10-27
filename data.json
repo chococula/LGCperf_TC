@@ -241,7 +241,9 @@
     "Video": "media/Omedia_TC02_01_20261021_165532_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC02_01_20261021_165532_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung",
-    "Service": "Samsung TV Plus"
+    "Service": "Samsung TV Plus",
+    "To_Ch": "1150",
+    "From_Ch": ""
    },
    {
     "TC": "Omedia_TC02",
@@ -255,7 +257,9 @@
     "Video": "media/Omedia_TC02_02_20261021_165603_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC02_02_20261021_165603_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung",
-    "Service": "Samsung TV Plus"
+    "Service": "Samsung TV Plus",
+    "To_Ch": "1152",
+    "From_Ch": "1150"
    },
    {
     "TC": "Omedia_TC02",
@@ -269,7 +273,9 @@
     "Video": "media/Omedia_TC02_03_20261021_165633_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC02_03_20261021_165633_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung",
-    "Service": "Samsung TV Plus"
+    "Service": "Samsung TV Plus",
+    "To_Ch": "1155",
+    "From_Ch": "1152"
    },
    {
     "TC": "Omedia_TC02",
@@ -283,7 +289,9 @@
     "Video": "media/Omedia_TC02_04_20261021_165703_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC02_04_20261021_165703_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung",
-    "Service": "Samsung TV Plus"
+    "Service": "Samsung TV Plus",
+    "To_Ch": "1160",
+    "From_Ch": "1155"
    },
    {
     "TC": "Omedia_TC02",
@@ -297,7 +305,9 @@
     "Video": "media/Omedia_TC02_05_20261021_165733_U8000_SWV1300_LGCV8.2.008.mp4",
     "GIF": "media/Omedia_TC02_05_20261021_165733_U8000_SWV1300_LGCV8.2.008.gif",
     "Manufacturer": "Samsung",
-    "Service": "Samsung TV Plus"
+    "Service": "Samsung TV Plus",
+    "To_Ch": "1163",
+    "From_Ch": "1160"
    },
    {
     "TC": "Omedia_TC02",
@@ -311,7 +321,9 @@
     "Service": "TV Channel",
     "Row_ID": "pub-tc02-hisense-tvch-1140-1",
     "Video": "media/Omedia_TC02_01_20261022_114029_43A6GV_SWV0015.09.09_LGCV001.mp4",
-    "GIF": "media/Omedia_TC02_01_20261022_114029_43A6GV_SWV0015.09.09_LGCV001.gif"
+    "GIF": "media/Omedia_TC02_01_20261022_114029_43A6GV_SWV0015.09.09_LGCV001.gif",
+    "To_Ch": "5249",
+    "From_Ch": ""
    },
    {
     "TC": "Omedia_TC02",
@@ -325,7 +337,9 @@
     "Service": "TV Channel",
     "Row_ID": "pub-tc02-hisense-tvch-1140-2",
     "Video": "media/Omedia_TC02_02_20261022_114048_43A6GV_SWV0015.09.09_LGCV001.mp4",
-    "GIF": "media/Omedia_TC02_02_20261022_114048_43A6GV_SWV0015.09.09_LGCV001.gif"
+    "GIF": "media/Omedia_TC02_02_20261022_114048_43A6GV_SWV0015.09.09_LGCV001.gif",
+    "To_Ch": "",
+    "From_Ch": "5249"
    },
    {
     "TC": "Omedia_TC02",
@@ -339,7 +353,9 @@
     "Service": "TV Channel",
     "Row_ID": "pub-tc02-hisense-tvch-1140-3",
     "Video": "media/Omedia_TC02_03_20261022_114107_43A6GV_SWV0015.09.09_LGCV001.mp4",
-    "GIF": "media/Omedia_TC02_03_20261022_114107_43A6GV_SWV0015.09.09_LGCV001.gif"
+    "GIF": "media/Omedia_TC02_03_20261022_114107_43A6GV_SWV0015.09.09_LGCV001.gif",
+    "To_Ch": "5227",
+    "From_Ch": ""
    },
    {
     "TC": "Omedia_TC02",
@@ -353,7 +369,9 @@
     "Service": "TV Channel",
     "Row_ID": "pub-tc02-hisense-tvch-1140-4",
     "Video": "media/Omedia_TC02_04_20261022_114122_43A6GV_SWV0015.09.09_LGCV001.mp4",
-    "GIF": "media/Omedia_TC02_04_20261022_114122_43A6GV_SWV0015.09.09_LGCV001.gif"
+    "GIF": "media/Omedia_TC02_04_20261022_114122_43A6GV_SWV0015.09.09_LGCV001.gif",
+    "To_Ch": "5215",
+    "From_Ch": "5227"
    },
    {
     "TC": "Omedia_TC02",
@@ -367,7 +385,9 @@
     "Service": "TV Channel",
     "Row_ID": "pub-tc02-hisense-tvch-1140-5",
     "Video": "media/Omedia_TC02_05_20261022_114145_43A6GV_SWV0015.09.09_LGCV001.mp4",
-    "GIF": "media/Omedia_TC02_05_20261022_114145_43A6GV_SWV0015.09.09_LGCV001.gif"
+    "GIF": "media/Omedia_TC02_05_20261022_114145_43A6GV_SWV0015.09.09_LGCV001.gif",
+    "To_Ch": "5214",
+    "From_Ch": "5215"
    },
    {
     "TC": "Omedia_TC02",
@@ -653,7 +673,9 @@
     "Case": "LGC O&O App",
     "Row_ID": "pub-tc02-lgc-oo-1625-1",
     "Video": "media/Omedia_TC02_01_20261022_162525_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
-    "GIF": "media/Omedia_TC02_01_20261022_162525_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+    "GIF": "media/Omedia_TC02_01_20261022_162525_NU7000_SWV43.21.61_LGCV4.1.14.gif",
+    "To_Ch": "128",
+    "From_Ch": "125"
    },
    {
     "TC": "Omedia_TC02",
@@ -669,7 +691,9 @@
     "Case": "LGC O&O App",
     "Row_ID": "pub-tc02-lgc-oo-1625-2",
     "Video": "media/Omedia_TC02_02_20261022_162552_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
-    "GIF": "media/Omedia_TC02_02_20261022_162552_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+    "GIF": "media/Omedia_TC02_02_20261022_162552_NU7000_SWV43.21.61_LGCV4.1.14.gif",
+    "To_Ch": "129",
+    "From_Ch": "128"
    },
    {
     "TC": "Omedia_TC02",
@@ -685,7 +709,9 @@
     "Case": "LGC O&O App",
     "Row_ID": "pub-tc02-lgc-oo-1625-3",
     "Video": "media/Omedia_TC02_03_20261022_162618_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
-    "GIF": "media/Omedia_TC02_03_20261022_162618_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+    "GIF": "media/Omedia_TC02_03_20261022_162618_NU7000_SWV43.21.61_LGCV4.1.14.gif",
+    "To_Ch": "130",
+    "From_Ch": "129"
    },
    {
     "TC": "Omedia_TC02",
@@ -701,7 +727,9 @@
     "Case": "LGC O&O App",
     "Row_ID": "pub-tc02-lgc-oo-1625-4",
     "Video": "media/Omedia_TC02_04_20261022_162640_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
-    "GIF": "media/Omedia_TC02_04_20261022_162640_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+    "GIF": "media/Omedia_TC02_04_20261022_162640_NU7000_SWV43.21.61_LGCV4.1.14.gif",
+    "To_Ch": "131",
+    "From_Ch": "130"
    },
    {
     "TC": "Omedia_TC02",
@@ -717,7 +745,9 @@
     "Case": "LGC O&O App",
     "Row_ID": "pub-tc02-lgc-oo-1625-5",
     "Video": "media/Omedia_TC02_05_20261022_162700_NU7000_SWV43.21.61_LGCV4.1.14.mp4",
-    "GIF": "media/Omedia_TC02_05_20261022_162700_NU7000_SWV43.21.61_LGCV4.1.14.gif"
+    "GIF": "media/Omedia_TC02_05_20261022_162700_NU7000_SWV43.21.61_LGCV4.1.14.gif",
+    "To_Ch": "132",
+    "From_Ch": "131"
    }
   ]
  }
