@@ -13,6 +13,7 @@ import keyboard
 import asyncio
 from kasa import SmartPlug
 import sys
+import lgc_similarity
 from config_store import remembered_input
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC_FullSuite_inputs.json).
@@ -348,24 +349,44 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
     }
 
 
+
+def open_lg_channels(ser):
+    """Home -> Right -> OK: opens LG Channels (the end screen of TC01 / TC02)."""
+    send_key(ser, 'Home', 3)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'OK', 2)
+
+
+def measure_lgc_home(ser, cap, run_idx, out_dir, timeout, soc, label):
+    """OK on LG Channels starts the timer; similarity with the saved LG Channels home stops it."""
+    def press():
+        winsound.Beep(800, 200)
+        sent_at = time.perf_counter()
+        send_key(ser, 'OK', 0)
+        return sent_at
+    result = lgc_similarity.measure(cap, press, soc, out_dir, timeout, run_label=label)
+    result['run'] = run_idx
+    return result
+
+
 def save_result(result, ts_run, csv_path, tc_label, extra_cols=None):
     if not result or not result['detected']:
         return
     row = {
-        'TC':                [tc_label],
-        'Run':               [result['run']],
-        'Timestamp':         [ts_run],
-        'Response_Time_ms':  [round(result['response_time_ms'], 2)],
-        'Frames':            [result['frame_count']],
-        'Status':            ['PASS'],
-        'Directory':         [result['dir']],
+        'TC':                tc_label,
+        'Run':               result['run'],
+        'Timestamp':         ts_run,
+        'Response_Time_ms':  round(result['response_time_ms'], 2),
+        'Frames':            result['frame_count'],
+        'Status':            'PASS',
+        'Directory':         result['dir'],
     }
+    if 'settle_time_ms' in result:          # similarity TCs: the second time (movement stopped)
+        settle = result['settle_time_ms']
+        row['Settle_Time_ms'] = round(settle, 2) if settle is not None else ''
     if extra_cols:
-        for k, v in extra_cols.items():
-            row[k] = [v]
-    df = pd.DataFrame(row)
-    write_header = not os.path.exists(csv_path)
-    df.to_csv(csv_path, mode='a', header=write_header, index=False)
+        row.update(extra_cols)
+    lgc_similarity.append_row(csv_path, row)   # keeps columns aligned when TCs add different ones
 
 
 def make_dir(base_root, label, run_idx, ts_run, config, suffix=""):
@@ -426,9 +447,8 @@ def run_tc01(ser, cap, config, run_idx, csv_path):
 
         cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
         os.makedirs(cycle_dir, exist_ok=True)
-        result = perform_motion_detection(
-            ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='OK'
-        )
+        result = measure_lgc_home(ser, cap, run_idx, cycle_dir, timeout, config['SoC'],
+                                  f"TC01 CYCLE {cycle_idx}")
         save_result(
             result, ts_run, csv_path, 'TC01', extra_cols={'Cycle': cycle_idx}
         )
@@ -495,7 +515,7 @@ def run_tc02(ser, cap, config, run_idx, csv_path):
         cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
         os.makedirs(cycle_dir, exist_ok=True)
 
-        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='OK')
+        result = measure_lgc_home(ser, cap, run_idx, cycle_dir, timeout, config['SoC'], f"TC02 CYCLE {cycle_idx}")
         save_result(result, ts_run, csv_path, 'TC02', extra_cols={'Cycle': cycle_idx})
         if result:
             result['cycle'] = cycle_idx
@@ -1472,6 +1492,10 @@ def main():
 
     if 'TC03' in selected_tcs or 'TC04' in selected_tcs:
         verify_t2_pga_channel_settings(config)
+
+    if 'TC01' in selected_tcs or 'TC02' in selected_tcs:
+        # TC01 / TC02 end = similarity with the LG Channels home (reference and TV screen area saved per SoC)
+        lgc_similarity.prepare(cap, config['SoC'], lambda: open_lg_channels(ser))
 
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"

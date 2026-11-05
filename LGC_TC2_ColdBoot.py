@@ -12,6 +12,7 @@ import asyncio
 from kasa import SmartPlug
 import sys
 from config_store import load_saved_configuration, save_configuration
+import lgc_similarity
 
 CONFIG_FILE = "LGC_TC2_ColdBoot_config.json"
 DEFAULT_CONFIGURATION = {
@@ -239,6 +240,26 @@ async def run_ac_power_cycle(ip, off_seconds):
         print(f"❌ Power cycle failed: {e}")
 
 
+
+def open_lg_channels(ser):
+    """Home -> Right -> OK: opens LG Channels (the end screen of TC01 / TC02)."""
+    send_key(ser, 'Home', 3)
+    send_key(ser, 'DpadRt', 2)
+    send_key(ser, 'OK', 2)
+
+
+def measure_lgc_home(ser, cap, run_idx, out_dir, timeout, soc, label):
+    """OK on LG Channels starts the timer; similarity with the saved LG Channels home stops it."""
+    def press():
+        winsound.Beep(800, 200)
+        sent_at = time.perf_counter()
+        send_key(ser, 'OK', 0)
+        return sent_at
+    result = lgc_similarity.measure(cap, press, soc, out_dir, timeout, run_label=label)
+    result['run'] = run_idx
+    return result
+
+
 def initialize_camera(camera_index=1):
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
@@ -357,6 +378,9 @@ def main():
     
     # Initialize camera
     cap = initialize_camera()
+
+    # End of the launch = similarity with the LG Channels home (reference and TV screen area saved per SoC)
+    lgc_similarity.prepare(cap, SoC, lambda: open_lg_channels(ser))
     
     # CSV path
     csv_path = "tv_response.csv"
@@ -414,23 +438,23 @@ def main():
             send_key(ser, 'DpadRt', 2)
             
             # Motion detection measurement
-            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
+            result = measure_lgc_home(ser, cap, run_idx, dir_path, timeout, SoC, f"TC02 RUN {run_idx}")
             
             if result:
                 results.append(result)
                 
                 # Save to CSV
                 if result['detected']:
-                    df = pd.DataFrame({
-                        'Run': [result['run']],
-                        'Timestamp': [ts_run],
-                        'Response_Time_ms': [round(result['response_time_ms'], 2)],
-                        'Frames': [result['frame_count']],
-                        'Status': ['PASS'],
-                        'Directory': [result['dir']]
+                    settle = result.get('settle_time_ms')
+                    lgc_similarity.append_row(csv_path, {
+                        'Run': result['run'],
+                        'Timestamp': ts_run,
+                        'Response_Time_ms': round(result['response_time_ms'], 2),
+                        'Settle_Time_ms': round(settle, 2) if settle is not None else '',
+                        'Frames': result['frame_count'],
+                        'Status': 'PASS',
+                        'Directory': result['dir'],
                     })
-                    write_header = not os.path.exists(csv_path)
-                    df.to_csv(csv_path, mode='a', header=write_header, index=False)
         
         except Exception as e:
             print(f"❌ Error in run {run_idx}: {e}")
