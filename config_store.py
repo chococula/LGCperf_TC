@@ -48,6 +48,47 @@ def choose_option(title, options, default):
         print(f"Enter 1-{len(names)}.")
 
 
+def remembered_input(answers_filename):
+    """An input() that remembers answers to prompts with '(default: X)' in answers_filename.
+
+    The last answer becomes the shown default and is returned on Enter. With nothing saved yet, Enter
+    returns '' so the script's own default applies. Prompts without '(default: ...)' are unchanged.
+    """
+    import builtins
+    import re
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), answers_filename)
+    try:
+        with open(path, encoding='utf-8') as answers_file:
+            answers = json.load(answers_file)
+        if not isinstance(answers, dict):
+            answers = {}
+    except (OSError, ValueError):
+        answers = {}
+    default_pattern = re.compile(r'\(default:\s*[^)]*\)', re.I)
+
+    def ask(prompt=''):
+        match = default_pattern.search(prompt)
+        if not match:
+            return builtins.input(prompt)
+        label = prompt[:match.start()].strip()
+        saved = answers.get(label)
+        if saved is not None:
+            prompt = f"{prompt[:match.start()]}(default: {saved}){prompt[match.end():]}"
+        answer = builtins.input(prompt).strip()
+        if not answer:
+            return saved if saved is not None else ''
+        answers[label] = answer
+        try:
+            with open(path, 'w', encoding='utf-8') as answers_file:
+                json.dump(answers, answers_file, indent=2, ensure_ascii=False)
+        except OSError:
+            pass
+        return answer
+
+    return ask
+
+
 def save_configuration(config_filename, config):
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_filename)
     try:

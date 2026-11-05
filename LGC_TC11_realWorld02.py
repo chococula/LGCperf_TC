@@ -11,6 +11,10 @@ import keyboard
 import asyncio
 from kasa import SmartPlug
 import sys
+from config_store import remembered_input
+
+# The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC11_realWorld02_inputs.json).
+input = remembered_input("LGC_TC11_realWorld02_inputs.json")
 
 # ===== Configuration Input =====
 def get_user_configuration():
