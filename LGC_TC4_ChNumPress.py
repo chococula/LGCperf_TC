@@ -309,6 +309,17 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
 
 
 # ===== Main Execution =====
+
+def prepare_channel_landing(ser, cap, config):
+    """Once per SoC: the TV screen box and the landing area, with an unmeasured ChDown and ChUp back, so the
+    channel the test runs on is the same afterwards. Does nothing when both are saved."""
+    lgc_similarity.ensure_screen(cap, config['SoC'])
+    if not lgc_similarity.has_landing(config['SoC']):
+        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
+        send_key(ser, 'ChUp', 0)
+        wait_with_countdown_noKeyInput(10, "Back on the test channel")
+
+
 def main():
     """Main test execution"""
     
@@ -364,6 +375,8 @@ def main():
 
     
 
+
+    prepare_channel_landing(ser, cap, config)
 
     for run_idx in range(1, num_runs + 1):
         print(f"\n{'='*60}")

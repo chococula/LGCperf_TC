@@ -300,6 +300,16 @@ def measure_lgc_home(ser, cap, run_idx, out_dir, timeout, soc, label):
     return result
 
 
+def prepare_channel_landing(ser, cap, config):
+    """Once per SoC: the TV screen box and the landing area, with an unmeasured ChDown and ChUp back, so the
+    channel the test runs on is the same afterwards. Does nothing when both are saved."""
+    lgc_similarity.ensure_screen(cap, config['SoC'])
+    if not lgc_similarity.has_landing(config['SoC']):
+        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
+        send_key(ser, 'ChUp', 0)
+        wait_with_countdown_noKeyInput(10, "Back on the test channel")
+
+
 def save_result(result, ts_run, csv_path, tc_label, extra_cols=None):
     if not result or not result['detected']:
         return
@@ -505,11 +515,7 @@ def run_tc03(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(10, "T2 Tennis")
 
     # One-time per SoC: TV screen box and the landing area (one unmeasured ChDown, then back to T2).
-    lgc_similarity.ensure_screen(cap, config['SoC'])
-    if not lgc_similarity.has_landing(config['SoC']):
-        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
-        send_key(ser, 'ChUp', 0)
-        wait_with_countdown_noKeyInput(10, "Back on T2 Tennis")
+    prepare_channel_landing(ser, cap, config)
 
     TC03_REPEAT_COUNT = 5
     results = []
@@ -596,6 +602,7 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'OK', 10)
 
     results = []
+    prepare_channel_landing(ser, cap, config)
     for cycle_idx in range(1, TC04_REPEAT_COUNT + 1):
         print(f"\n[TC04] Scenario cycle {cycle_idx}/{TC04_REPEAT_COUNT}")
 
@@ -686,6 +693,7 @@ def run_tc05_ntn(ser, cap, config, run_idx, csv_path):
     print(f"Output directory: {dir_path}")
 
     results = []
+    prepare_channel_landing(ser, cap, config)
     for cycle_idx in range(1, TC05_NTN_REPEAT_COUNT + 1):
         print(f"\n[TC05_NtN] Scenario cycle {cycle_idx}/{TC05_NTN_REPEAT_COUNT}")
 
@@ -759,6 +767,7 @@ def run_tc05_ntp(ser, cap, config, run_idx, csv_path):
     print(f"Output directory: {dir_path}")
 
     results = []
+    prepare_channel_landing(ser, cap, config)
     for cycle_idx in range(1, TC05_NTP_REPEAT_COUNT + 1):
         print(f"\n[TC05_NtP] Scenario cycle {cycle_idx}/{TC05_NTP_REPEAT_COUNT}")
 
@@ -832,6 +841,7 @@ def run_tc05_ptp(ser, cap, config, run_idx, csv_path):
     print(f"Output directory: {dir_path}")
 
     results = []
+    prepare_channel_landing(ser, cap, config)
     for cycle_idx in range(1, TC05_PTP_REPEAT_COUNT + 1):
         print(f"\n[TC05_PtP] Scenario cycle {cycle_idx}/{TC05_PTP_REPEAT_COUNT}")
 
