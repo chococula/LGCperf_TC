@@ -380,6 +380,41 @@ def ensure_landing(cap, soc, change_once):
     return model['landing']
 
 
+def has_landing(soc):
+    return bool((_settings()['models'].get(soc) or {}).get('landing'))
+
+
+ROUTE_KEYS = {'Up': 'DpadUp', 'Down': 'DpadDn', 'Left': 'DpadLt', 'Right': 'DpadRt'}
+
+
+def navigate_from_home(send, cap, soc, name, what, fallback):
+    """With Home on screen: move to an item and press OK, like the Omedia TCs.
+
+    The first time on a SoC the user clicks the highlighted item and the target on the camera view
+    (Omedia_TC02.select_plan: the planned keys are drawn, arrow keys adjust, Enter goes, S keeps fallback);
+    the route is saved per SoC and replayed without clicks afterwards. send(key, delay) sends one LGC key.
+    """
+    settings = _settings()
+    routes = settings['models'].setdefault(soc, {}).setdefault('routes', {})
+    route = routes.get(name)
+    if route is None:
+        import Omedia_TC02 as planner
+        print(f"\n[NAV] First time on {soc}: click the highlighted item, then {what}; ENTER sends the keys + OK.")
+        chosen = planner.select_plan(cap, 1, what)
+        if chosen is None:
+            route = list(fallback)
+            print(f"[NAV] Skipped: using the default keys {route}.")
+        else:
+            route = list(chosen[0])
+            routes[name] = route
+            save_configuration(SETTINGS_FILE, settings)
+            print(f"[NAV] Route to {what} saved for {soc}: {route or 'no move'}.")
+    print(f"[NAV] Home -> {what}: {', '.join(route) or 'no move'} + OK")
+    for key in route:
+        send(ROUTE_KEYS[key], 1)
+    send('OK', 2)
+
+
 def measure_channel(cap, press_key, change_once, soc, out_dir, timeout, run_idx, run_label="RUN"):
     """Channel change like Omedia_TC02: after the key the whole TV screen goes black, then the picture lands
     in the landing area (its pattern changes). Returns the LGC result dict."""

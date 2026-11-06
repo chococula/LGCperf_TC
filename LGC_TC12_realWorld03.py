@@ -1,4 +1,5 @@
 import cv2
+from camera_util import open_camera
 import numpy as np
 import time
 import pandas as pd
@@ -319,10 +320,9 @@ async def run_ac_power_cycle(ip, off_seconds):
 
 
 def initialize_camera(camera_index=0):
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    print(f"✓ Camera initialized (index: {camera_index})")
-    return cap
+    # the configured index first, then the others; only a camera that streams real pictures is used
+    return open_camera(camera_index)
+
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK', mode=None,
                              target=None):

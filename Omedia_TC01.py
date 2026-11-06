@@ -1,4 +1,5 @@
 import cv2
+from camera_util import open_camera
 import numpy as np
 import os
 import pandas as pd
@@ -133,19 +134,8 @@ def get_user_configuration():
 
 
 def initialize_camera(camera_index=CAMERA_INDEX):
-    camera_indices = [camera_index] + [index for index in range(4) if index != camera_index]
-    for index in camera_indices:
-        camera = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-        if camera.isOpened():
-            camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            print(f"Camera initialized (index: {index})")
-            return camera
-        camera.release()
-
-    raise RuntimeError(
-        f"No camera could be opened at indices {camera_indices}. "
-        "Check the camera connection or close other apps using the camera."
-    )
+    # the configured index first, then the others; only a camera that streams real pictures is used
+    return open_camera(camera_index)
 
 
 def position_camera(camera):

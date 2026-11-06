@@ -1,5 +1,6 @@
 
 import cv2
+from camera_util import open_camera
 import numpy as np
 import time
 import pandas as pd
@@ -263,10 +264,9 @@ def initialize_serial(port):
 
 
 def initialize_camera(camera_index=0):
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    print(f"✓ Camera initialized (index: {camera_index})")
-    return cap
+    # the configured index first, then the others; only a camera that streams real pictures is used
+    return open_camera(camera_index)
+
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK', mode=None,
                              target=None):
@@ -467,97 +467,70 @@ def run_tc02_between_runs(ser):
 # ===== TC03 – Ch Zapping ============================================
 # =====================================================================
 
-def setup_tc03(ser, cap, config):
-    ip = config['ip']
-    print("\n[TC03 SETUP] Setting up test environment...")
-    send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
-
-    print("\n[AC POWER CYCLE] Starting power cycle...")
-    run_ac_power_cycle(ip, 60)
-    wait_with_countdown_noKeyInput(60, "Power Stabilization")
-
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 10)
-
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-
-    send_key(ser, 'Num_04', 1)
-    send_key(ser, 'Num_04', 1)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'OK')
-
-
 def run_tc03(ser, cap, config, run_idx, csv_path):
     ip      = config['ip']
     timeout = config['timeout']
-    t2_channel = config.get('t2_channel', '443')
-    pga_channel = config.get('pga_channel', '442')
+    t2_channel = config.get('t2_channel', '450')
+    pga_channel = config.get('pga_channel', '449')
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_dir = make_dir("C:/Temp", "LGC_Perf_TC03", run_idx, ts_run, config)
     print(f"Output directory: {base_dir}")
 
-    print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> AC Power Off -> AC Power On -> Home PIP LiveTV")
-    send_key(ser, 'LiveTV', 0.5)
-    send_key(ser, 'Num_03', 0.5)
-    send_key(ser, 'Num_06', 0.5)
-    send_key(ser, 'DASH', 0.5)
-    send_key(ser, 'Num_01', 0.5)
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> Home PIP Live TV "
+          "-> 11-1 NBC (180 s) -> T2")
+    send_key(ser, 'LiveTV', 3)
+    for key_name in channel_to_keys('36-1'):
+        send_key(ser, key_name, 1)
     send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(60, "LiveTV 36-1")
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1 (Fox News)")
 
     print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
     run_ac_power_cycle(ip, 60)
     wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    send_key(ser, 'Home', 1)
-    send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 10)
+    print("\n[STEP] Home -> PIP Live TV")
+    send_key(ser, 'Home', 3)
+    lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                      'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+    wait_with_countdown_noKeyInput(10, "Live TV")
 
-    print("\n[STEP] Entering channel 11-1 (NBC)")
+    print("\n[STEP] Channel 11-1 (NBC)")
     for key_name in channel_to_keys('11-1'):
         send_key(ser, key_name, 1)
     send_key(ser, 'OK', 2)
     wait_with_countdown_noKeyInput(180, "NBC 11-1")
 
-    print(f"\n[STEP] Entering channel {t2_channel} (T2 Tennis)")
+    print(f"\n[STEP] Channel {t2_channel} (T2 Tennis)")
     go_to_channel(ser, t2_channel, delay=1)
-    wait_with_countdown_noKeyInput(10, "T2 Tennis Stabilization")
+    wait_with_countdown_noKeyInput(10, "T2 Tennis")
 
-    print(f"\n[CHANNEL CHECK] Configured PGA channel: {pga_channel}")
+    # One-time per SoC: TV screen box and the landing area (one unmeasured ChDown, then back to T2).
+    lgc_similarity.ensure_screen(cap, config['SoC'])
+    if not lgc_similarity.has_landing(config['SoC']):
+        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
+        send_key(ser, 'ChUp', 0)
+        wait_with_countdown_noKeyInput(10, "Back on T2 Tennis")
+
     TC03_REPEAT_COUNT = 5
     results = []
     for cycle_idx in range(1, TC03_REPEAT_COUNT + 1):
         print(f"\n[TC03] Scenario cycle {cycle_idx}/{TC03_REPEAT_COUNT}")
+        send_key(ser, 'ChDown', 0)
+        wait_with_countdown_noKeyInput(10, f"PGA {pga_channel}")
 
-        print("\n[TC03] Starting measurement with ChDown on T2 Tennis")
+        print(f"[TC03] Measuring ChUp: {pga_channel} -> {t2_channel}")
         cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
         os.makedirs(cycle_dir, exist_ok=True)
-
         result = perform_motion_detection(
-            ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChDown'
+            ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp'
         )
-        save_result(result, ts_run, csv_path, 'TC03', extra_cols={'Cycle': cycle_idx, 'PGA_Channel': pga_channel})
+        save_result(result, ts_run, csv_path, 'TC03',
+                    extra_cols={'Cycle': cycle_idx, 'From_Ch': pga_channel, 'To_Ch': t2_channel})
         if result:
             result['cycle'] = cycle_idx
             result['pga_channel'] = pga_channel
             results.append(result)
-
-        wait_with_countdown_noKeyInput(10, "PGA Channel wait")
-
-        print(f"\n[TC03] Returning to {t2_channel} T2 Tennis Channel")
-        go_to_channel(ser, t2_channel, delay=1)
-        wait_with_countdown_noKeyInput(5, f"{t2_channel} T2 Tennis channel wait")
+        wait_with_countdown_noKeyInput(5, f"T2 Tennis {t2_channel}")
 
     return results
 
@@ -1284,10 +1257,10 @@ def get_user_configuration(selected_tcs):
     }
 
     if 'TC03' in selected_tcs or 'TC04' in selected_tcs:
-        t2_channel = input("T2 Tennis Channel (default: 443): ").strip() or "443"
-        pga_channel = input("PGA Channel (default: 442): ").strip() or "442"
-        config['t2_channel'] = validate_channel_value(t2_channel, "443")
-        config['pga_channel'] = validate_channel_value(pga_channel, "442")
+        t2_channel = input("T2 Tennis Channel (default: 450): ").strip() or "450"
+        pga_channel = input("PGA Channel (default: 449): ").strip() or "449"
+        config['t2_channel'] = validate_channel_value(t2_channel, "450")
+        config['pga_channel'] = validate_channel_value(pga_channel, "449")
 
     if 'TC05_NtN' in selected_tcs:
         config['native_previous_channel'] = (
@@ -1324,7 +1297,6 @@ def get_user_configuration(selected_tcs):
 # =====================================================================
 
 TC_SETUP_MAP = {
-    'TC03':      setup_tc03,
     'TC04':      setup_tc04,
     'TC05_NtN':  setup_tc05_ntn,
     'TC05_NtP':  setup_tc05_ntp,

@@ -1,4 +1,5 @@
 import cv2
+from camera_util import open_camera
 import numpy as np
 import time
 import pandas as pd
@@ -232,10 +233,9 @@ async def run_ac_power_cycle(ip, off_seconds):
 
 
 def initialize_camera(camera_index=1):
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    print(f"✓ Camera initialized (index: {camera_index})")
-    return cap
+    # the configured index first, then the others; only a camera that streams real pictures is used
+    return open_camera(camera_index)
+
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp', mode=None,
                              target=None):
@@ -251,6 +251,22 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
 
 
 # ===== Main Execution =====
+
+CHANNEL_KEY_MAP = {str(d): f'Num_0{d}' for d in range(10)}
+CHANNEL_KEY_MAP['-'] = 'DASH'
+
+
+def channel_to_keys(channel):
+    return [CHANNEL_KEY_MAP[char] for char in str(channel)]
+
+
+def go_to_channel(ser, channel, delay=1):
+    print(f"  > Navigating to channel {channel}")
+    for key_name in channel_to_keys(channel):
+        send_key(ser, key_name, delay)
+    send_key(ser, 'OK', 0)
+
+
 def main():
     """Main test execution"""
     
@@ -280,40 +296,43 @@ def main():
     print(f"  Starting {num_runs} Test Runs")
     print(f"{'='*60}\n")
     
-    # Main test loop
-    # Pre-conditions
-    print("\n[PRE-CONDITION] Setting up test environment...")
+    t2_channel = input("T2 Tennis Channel (default: 450): ").strip() or "450"
+    pga_channel = input("PGA Channel (default: 449): ").strip() or "449"
+
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> Home PIP Live TV "
+          "-> 11-1 NBC (180 s) -> T2")
     send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
+    for key_name in channel_to_keys('36-1'):
+        send_key(ser, key_name, 1)
     send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1 (Fox News)")
 
-
-    # AC Power cycle
-    print("\n[AC POWER CYCLE] Starting power cycle...")
+    print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
     asyncio.run(run_ac_power_cycle(ip, 60))
-    wait_with_countdown_noKeyInput(60, "Power Stabilization")
+    wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    # Launching PIP
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 10)
+    print("\n[STEP] Home -> PIP Live TV")
+    send_key(ser, 'Home', 3)
+    lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                      'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+    wait_with_countdown_noKeyInput(10, "Live TV")
 
-    # Live11-1
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-    
-    # IP Live 442
-    send_key(ser, 'Num_04', 1)
-    send_key(ser, 'Num_04', 1)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'OK')
+    print("\n[STEP] Channel 11-1 (NBC)")
+    for key_name in channel_to_keys('11-1'):
+        send_key(ser, key_name, 1)
+    send_key(ser, 'OK', 2)
+    wait_with_countdown_noKeyInput(180, "NBC 11-1")
+
+    print(f"\n[STEP] Channel {t2_channel} (T2 Tennis)")
+    go_to_channel(ser, t2_channel, delay=1)
+    wait_with_countdown_noKeyInput(10, "T2 Tennis")
+
+    # One-time per SoC: TV screen box and the landing area (one unmeasured ChDown, then back to T2).
+    lgc_similarity.ensure_screen(cap, config['SoC'])
+    if not lgc_similarity.has_landing(config['SoC']):
+        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
+        send_key(ser, 'ChUp', 0)
+        wait_with_countdown_noKeyInput(10, "Back on T2 Tennis")
 
     for run_idx in range(1, num_runs + 1):
         print(f"\n{'='*60}")
@@ -330,10 +349,11 @@ def main():
         print(f"Output directory: {dir_path}")
         
         try:
-            send_key(ser, 'ChDown', 10)
- 
-            # Motion detection measurement
-            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
+            send_key(ser, 'ChDown', 0)
+            wait_with_countdown_noKeyInput(10, f"PGA {pga_channel}")
+
+            # Measured: ChUp from PGA back to T2 Tennis
+            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp')
             
             if result:
                 results.append(result)
@@ -357,14 +377,7 @@ def main():
         # Wait before next run
         if run_idx < num_runs:
             
-            wait_with_countdown_noKeyInput(10, "Interval between runs")
-            """
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'Back', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'OK', 2)
-            """
+            wait_with_countdown_noKeyInput(5, f"T2 Tennis {t2_channel}")
             
     
 
