@@ -15,6 +15,7 @@ import asyncio
 from kasa import SmartPlug
 import sys
 import lgc_similarity
+import suite_progress
 from config_store import remembered_input
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC_FullSuite_inputs.json).
@@ -155,14 +156,8 @@ def send_shell_command_with_debug(ser, command):
 
 
 def wait_with_countdown_noKeyInput(seconds, description="Timer"):
-    winsound.Beep(1000, 200)
-    print(f"\n[TIMER] {description}: {seconds} seconds")
-    for remaining in range(seconds, 0, -1):
-        print(f"  ⏱ {remaining} seconds remaining...", end="\r")
-        time.sleep(1)
-    print(" " * 50, end="\r")
-    winsound.Beep(1500, 300)
-    print(f"[TIMER] ✓ {description} Complete!\n")
+    # one step of the TC: camera view and console show TC i/N, step j/M and the time left
+    suite_progress.countdown(seconds, description)
 
 
 def wait_for_screen_stable(cap, timeout=60, stable_threshold=5.0, min_stable_duration=4.0):
@@ -242,14 +237,17 @@ async def _ac_power_cycle(ip, off_seconds):
         await dev.update()
         await dev.turn_off()
         print("✓ Device powered OFF")
-        await asyncio.sleep(off_seconds)
+        suite_progress.sound('ac_off')
+        suite_progress.countdown(off_seconds, "AC power OFF", as_step=False)
         await dev.turn_on()
         print("✓ Device powered ON")
+        suite_progress.sound('ac_on')
     except Exception as e:
         print(f"❌ Power cycle failed: {e}")
 
 
 def run_ac_power_cycle(ip, off_seconds):
+    suite_progress.step('ac', f"AC power OFF {off_seconds} s -> ON")
     asyncio.run(_ac_power_cycle(ip, off_seconds))
 
 
@@ -272,6 +270,7 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
                              target=None):
     """End detection like the Omedia TCs (lgc_similarity.detect): CH+/CH- = the screen goes black, then the
     picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped."""
+    suite_progress.step('measure', f"Measure ({trigger_key})")
     def press():
         winsound.Beep(800, 200)
         sent_at = time.perf_counter()
@@ -290,6 +289,7 @@ def open_lg_channels(ser):
 
 def measure_lgc_home(ser, cap, run_idx, out_dir, timeout, soc, label):
     """OK on LG Channels starts the timer; similarity with the saved LG Channels home stops it."""
+    suite_progress.step('measure', "Measure (OK)")
     def press():
         winsound.Beep(800, 200)
         sent_at = time.perf_counter()
@@ -1417,15 +1417,17 @@ def main():
     os.makedirs("C:/Temp", exist_ok=True)
 
     all_results = []
+    suite_progress.state['camera'] = cap
+    lgc_similarity.STATUS = suite_progress.status_lines   # TC / step line in the measurement windows
 
-    for tc_label in selected_tcs:
+    for tc_number, tc_label in enumerate(selected_tcs, 1):
         tc_runs = 1 if tc_label in ('TC01', 'TC02', 'TC03', 'TC04', 'TC05_NtN', 'TC05_NtP', 'TC05_PtP', 'TC10') else num_runs
-        print(f"\n{'='*60}")
-        print(f"  ▶▶▶  {tc_label}  ({tc_runs} runs)")
-        print(f"{'='*60}")
+        suite_progress.begin_tc(tc_number, len(selected_tcs), tc_label, tc_runs, cap)
 
         # One-time setup if needed
         if tc_label in TC_SETUP_MAP:
+            suite_progress.begin_run(1, suite_progress.plan_steps(
+                sys.modules[__name__], TC_SETUP_MAP[tc_label], (ser, cap, config)), phase='Setup')
             try:
                 TC_SETUP_MAP[tc_label](ser, cap, config)
             except Exception as e:
@@ -1442,6 +1444,9 @@ def main():
             print(f"\n{'='*60}")
             print(f"  [{tc_label}] RUN {run_idx}/{tc_runs}")
             print(f"{'='*60}")
+            suite_progress.begin_run(run_idx, suite_progress.plan_steps(
+                sys.modules[__name__], run_fn, (ser, cap, config, run_idx, csv_path),
+                [(lgc_similarity, 'navigate_from_home', lambda *a, **k: None)]))
             try:
                 result = run_fn(ser, cap, config, run_idx, csv_path)
                 if isinstance(result, list):
@@ -1460,6 +1465,7 @@ def main():
                         print(f"⚠ Between-run action failed: {e}")
 
         all_results.extend(tc_results)
+        suite_progress.sound('tc_done')
 
         # Per-TC summary
         passed = sum(1 for r in tc_results if r.get('detected'))
@@ -1471,6 +1477,7 @@ def main():
     # ===== Overall Summary =====
     print(f"\n{'='*60}")
     print(f"  ===  FULL SUITE COMPLETE  ===")
+    suite_progress.sound('all_done')
     print(f"{'='*60}")
     total_passed = sum(1 for r in all_results if r.get('detected'))
     print(f"Total measurements : {len(all_results)}")

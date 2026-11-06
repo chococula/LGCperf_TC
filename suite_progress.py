@@ -1,0 +1,192 @@
+"""Where the FullSuite is: TC i/N, run, step j/M with countdowns, and sounds at the moments that matter.
+
+Before each TC run its steps (timed waits, AC power cycles, measurements) are counted by a dry run of the
+TC function with every TV, camera and plug action replaced; during the real run each such action calls
+step(), so the screen and the console show "TC 2/4 TC03 | Step 5/21 NBC 11-1 | 02:31 left".
+"""
+import time
+import winsound
+
+import cv2
+import numpy as np
+
+WINDOW = "LGC FullSuite"
+state = {'tc_index': 0, 'tc_total': 0, 'tc_label': '', 'run_idx': 1, 'runs': 1,
+         'steps': [], 'step': 0, 'step_name': '', 'camera': None, 'phase': ''}
+
+
+# ---------- sounds ----------
+
+def _tones(*notes):
+    for frequency, ms in notes:
+        winsound.Beep(frequency, ms)
+
+
+def sound(event):
+    """tc_start, countdown_start, tick (last 3 s), countdown_end, ac_off, ac_on, attention, tc_done, all_done."""
+    _tones(*{
+        'tc_start': ((660, 120), (880, 120), (1100, 160)),
+        'countdown_start': ((1000, 150),),
+        'tick': ((900, 80),),
+        'countdown_end': ((1500, 250),),
+        'ac_off': ((500, 450),),
+        'ac_on': ((1200, 450),),
+        'attention': ((1000, 120), (1400, 120), (1000, 120), (1400, 160)),
+        'tc_done': ((1200, 150), (1500, 250)),
+        'all_done': ((1047, 150), (1319, 150), (1568, 150), (2093, 400)),
+    }[event])
+
+
+# ---------- plan and position ----------
+
+def begin_tc(index, total, label, runs, camera=None):
+    state.update(tc_index=index, tc_total=total, tc_label=label, runs=runs, run_idx=1, steps=[], step=0,
+                 step_name='')
+    if camera is not None:
+        state['camera'] = camera
+    print(f"\n{'#' * 60}\n  TC {index}/{total}: {label}  ({runs} run{'s' if runs > 1 else ''})\n{'#' * 60}")
+    sound('tc_start')
+
+
+def begin_run(run_idx, steps, phase=''):
+    """steps: [(kind, name, seconds)] from the dry run of this TC run (phase 'Setup' for the setup)."""
+    state.update(run_idx=run_idx, steps=list(steps), step=0, step_name='', phase=phase)
+    total = sum(seconds for _, _, seconds in steps)
+    print(f"[PLAN] {state['tc_label']} {phase or f'run {run_idx}'}: {len(steps)} steps, about {_mmss(total)} of timed waits")
+
+
+def step(kind, name):
+    """The next step starts (a timed wait, an AC power cycle or a measurement)."""
+    state['step'] += 1
+    state['step_name'] = name
+    if state['step'] > len(state['steps']):            # an extra step the dry run did not see (one-time setup)
+        state['steps'].append((kind, name, 0))
+    print(f"\n[{header()}] {name}")
+
+
+def header():
+    s = state
+    run = f" {s['phase']}" if s['phase'] else f" run {s['run_idx']}/{s['runs']}" if s['runs'] > 1 else ""
+    return f"TC {s['tc_index']}/{s['tc_total']} {s['tc_label']}{run} | Step {s['step']}/{len(s['steps'])}"
+
+
+def remaining_after_current():
+    return sum(seconds for _, _, seconds in state['steps'][state['step']:])
+
+
+def status_lines():
+    """Lines for the measurement windows (lgc_similarity draws them under its own)."""
+    if not state['tc_label']:
+        return []
+    return [(f"{header()}: {state['step_name']}", (255, 255, 255), 0.55)]
+
+
+def _mmss(seconds):
+    seconds = int(round(seconds))
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
+
+
+# ---------- countdown ----------
+
+def countdown(seconds, name, as_step=True):
+    """A timed wait (one step unless as_step=False): camera view with TC / step / time left, console line,
+    ticks in the last 3 s."""
+    if as_step:
+        step('wait', name)
+        sound('countdown_start')
+    camera = state['camera']
+    end = time.perf_counter() + seconds
+    last_tick = None
+    while True:
+        left = end - time.perf_counter()
+        if left <= 0:
+            break
+        whole = int(left) + 1                          # rounded up: never 00:00 while time is left
+        rest = remaining_after_current() + whole
+        if whole != last_tick:
+            last_tick = whole
+            line = f"[{header()}] {name}: {_mmss(whole)} left | TC run ~{_mmss(rest)} left"
+            print(f"\r{line:<110}", end="", flush=True)
+            if whole <= 3:
+                sound('tick')
+        frame = None
+        if camera is not None:
+            ok, frame = camera.read()
+            frame = frame if ok else None
+        if frame is None:
+            frame = np.full((480, 640, 3), 30, np.uint8)
+        top = (f"TC {state['tc_index']}/{state['tc_total']} {state['tc_label']}"
+               + (f" {state['phase']}" if state['phase'] else
+                  f" run {state['run_idx']}/{state['runs']}" if state['runs'] > 1 else "")
+               + f"  |  Step {state['step']}/{len(state['steps'])}")
+        cv2.imshow(WINDOW, _panel(frame, [
+            (top, (0, 255, 255), 0.55),
+            (f"{name}:  {_mmss(whole)} left   (TC run ~{_mmss(rest)})", (0, 255, 0), 0.55),
+        ]))
+        cv2.waitKey(1)
+        time.sleep(max(0.0, min(0.1, end - time.perf_counter())))
+    print(f"\r[{header()}] {name}: done{' ' * 60}")
+    if as_step:
+        sound('countdown_end')
+
+
+def _panel(frame, lines):
+    image = frame.copy()
+    height = 10 + 24 * len(lines)                  # a thin bar: the TV stays visible
+    cv2.rectangle(image, (0, 0), (image.shape[1], height), (25, 25, 25), -1)
+    for i, (text, color, scale) in enumerate(lines):
+        cv2.putText(image, text, (8, 24 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA)
+    return image
+
+
+# ---------- dry run ----------
+
+def plan_steps(module, run_fn, args, extra_patches=()):
+    """Run run_fn(*args) with every action replaced and return its steps [(kind, name, seconds)].
+
+    module: the FullSuite module (its globals are swapped and restored). extra_patches: (object, name, fn).
+    """
+    steps = []
+
+    def record(kind, name, seconds=0):
+        steps.append((kind, name, seconds))
+
+    def fake_measure(*a, trigger_key='OK', **k):
+        key = a[6] if len(a) > 6 else trigger_key
+        record('measure', f"Measure ({key})")
+        return None
+
+    patches = [
+        (module, 'send_key', lambda *a, **k: None),
+        (module, 'send_shell_command_with_debug', lambda *a, **k: None),
+        (module, 'wait_with_countdown_noKeyInput', lambda seconds, description="Timer": record('wait', description, seconds)),
+        (module, 'run_ac_power_cycle', lambda ip, off: record('ac', f"AC power OFF {off} s -> ON", off)),
+        (module, 'perform_motion_detection', fake_measure),
+        (module, 'measure_lgc_home', lambda *a, **k: (record('measure', "Measure (OK)"), None)[1]),
+        (module, 'wait_for_app_ready', lambda *a, **k: True),
+        (module, 'wait_for_screen_stable', lambda *a, **k: True),
+        (module, 'save_result', lambda *a, **k: None),
+        (module, 'make_dir', lambda *a, **k: _scratch()),
+        (module, 'prepare_channel_landing', lambda *a, **k: None),
+    ] + list(extra_patches)
+    saved = []
+    for obj, name, fn in patches:
+        if hasattr(obj, name):
+            saved.append((obj, name, getattr(obj, name)))
+            setattr(obj, name, fn)
+    real_sleep = time.sleep
+    time.sleep = lambda *a, **k: None
+    try:
+        run_fn(*args)
+    except Exception as error:                      # an unexpected path: show what was counted
+        print(f"[PLAN] Step count may be short ({type(error).__name__}: {error})")
+    finally:
+        time.sleep = real_sleep
+        for obj, name, fn in saved:
+            setattr(obj, name, fn)
+    return steps
+
+
+def _scratch():
+    import tempfile
+    return tempfile.mkdtemp(prefix="lgc_plan_")

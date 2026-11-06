@@ -18,6 +18,7 @@ import time
 import cv2
 import numpy as np
 import pandas as pd
+import winsound
 
 from config_store import load_saved_configuration, save_configuration
 from run_video import make_run_videos
@@ -25,6 +26,7 @@ from run_video import make_run_videos
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = "LGC_similarity_config.json"     # {SoC: {'screen': [x, y, w, h], 'threshold': 0.7}}
 WINDOW = "LGC similarity"
+STATUS = lambda: []            # extra overlay lines (FullSuite: TC i/N, step j/M)
 PRE_ROLL_SECONDS = 2.0
 CHECK_SECONDS = 3.0             # live check of the reference right after it is captured
 SCREEN_MARGIN = 12              # the screen area is searched this many pixels around (small camera shifts)
@@ -66,6 +68,7 @@ def ensure_screen(cap, soc):
 
 def _select(cap, window, message, whole_screen=False, frame=None):
     frame = _read(cap) if frame is None else frame
+    attention()
     while True:
         print(f"[SIMILARITY] {message}")
         x, y, w, h = (int(v) for v in cv2.selectROI(window, frame, showCrosshair=False))
@@ -97,7 +100,14 @@ def _small(frame, screen):
                       interpolation=cv2.INTER_AREA).astype(np.float32)
 
 
+def attention():
+    """The user has to do something now (Enter, click, drag)."""
+    for frequency, ms in ((1000, 120), (1400, 120), (1000, 120), (1400, 160)):
+        winsound.Beep(frequency, ms)
+
+
 def _overlay(frame, lines):
+    lines = list(lines) + list(STATUS())
     image = frame.copy()
     box_h = 18 + 34 * len(lines)
     cv2.rectangle(image, (0, 0), (min(image.shape[1], 640), box_h), (40, 40, 40), -1)
@@ -136,6 +146,7 @@ def prepare(cap, soc, open_end_screen):
         print("\n[SIMILARITY] Opening LG Channels to capture its home screen as the reference...")
         open_end_screen()
         print("[SIMILARITY] When the LG Channels home has fully loaded, press ENTER in the camera window.")
+        attention()
         while True:
             frame = _read(cap)
             cv2.imshow(WINDOW, _overlay(frame, [("ENTER when LG Channels home has fully loaded",
@@ -275,6 +286,8 @@ def measure(cap, press_key, soc, out_dir, timeout, run_label="RUN", target='Home
                         (f"{run_label}  {target.upper()} (SIMILARITY)  {ms / 1000:.3f} s", (0, 255, 0), 0.9),
                         (f"Similarity {score:.3f} / {threshold:.3f}", (0, 255, 0), 0.8)]))
                     print(f"[{run_label}] {target} matched at {ms:.2f} ms (similarity {score:.3f}).")
+                    winsound.Beep(1500, 250)
+                    winsound.Beep(2500, 350)
             if reference is None:
                 # Settle only: the start of the LAST still stretch, so a still loading screen that is
                 # followed by the real page does not count. Recording ends after SETTLE_HOLD_SECONDS still.
@@ -325,6 +338,11 @@ def measure(cap, press_key, soc, out_dir, timeout, run_label="RUN", target='Home
         grabber.join(timeout=2)
         writer.close()
     ends = [v for v in (home_ms, settle_ms) if v is not None]
+    if reference is None and settle_ms is not None:
+        winsound.Beep(1500, 250)
+        winsound.Beep(2500, 350)
+    elif not ends:
+        winsound.Beep(400, 700)                     # nothing detected
     try:
         make_run_videos(out_dir, threshold=threshold or 1.0, run_label=run_label,
                         end_ms=max(ends) if ends else None)
@@ -345,6 +363,7 @@ def measure(cap, press_key, soc, out_dir, timeout, run_label="RUN", target='Home
 
 
 def _offer_reference(frame, soc, target):
+    attention()
     cv2.imshow(f"{target} reference?", frame)
     cv2.waitKey(1)
     answer = input(f"Save this end screen as the {target} reference for {soc}? (Y/n): ").strip().lower()
@@ -363,6 +382,7 @@ def ensure_landing(cap, soc, change_once):
     print("\n[CHANNEL] One unmeasured channel change to choose the landing area.")
     change_once()
     print("[CHANNEL] Press ENTER in the camera window while the screen is black / loading.")
+    attention()
     while True:
         frame = _read(cap)
         cv2.imshow(WINDOW, _overlay(frame, [("ENTER while the screen is black / loading", (0, 255, 255), 0.8)]))
@@ -400,6 +420,7 @@ def navigate_from_home(send, cap, soc, name, what, fallback):
     if route is None:
         import Omedia_TC02 as planner
         print(f"\n[NAV] First time on {soc}: click the highlighted item, then {what}; ENTER sends the keys + OK.")
+        attention()
         chosen = planner.select_plan(cap, 1, what)
         if chosen is None:
             route = list(fallback)
