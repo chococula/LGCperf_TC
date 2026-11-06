@@ -211,3 +211,102 @@ def plan_steps(module, run_fn, args, extra_patches=()):
 def _scratch():
     import tempfile
     return tempfile.mkdtemp(prefix="lgc_plan_")
+
+
+# ---------- channel check: after Num keys + OK, did the TV really change channel? ----------
+
+DIGIT_KEYS = {**{f'Num_0{d}': str(d) for d in range(10)}, 'DASH': '-'}
+CHANGE_DIFF = 12.0            # mean change of the screen (1/8 size, gray) that means a new picture / black
+CHANGE_SECONDS = 8.0
+_entry = {'digits': '', 'before': None, 'busy': False}
+
+
+def _screen_small():
+    camera = state['camera']
+    if camera is None:
+        return None
+    frame = None
+    for _ in range(3):                         # drop buffered frames
+        ok, read = camera.read()
+        frame = read if ok else frame
+    if frame is None:
+        return None
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame[h // 10:h * 9 // 10, w // 10:w * 9 // 10], cv2.COLOR_BGR2GRAY)
+    return cv2.resize(gray, (gray.shape[1] // 8, gray.shape[0] // 8)).astype(np.float32), frame
+
+
+def before_key(key):
+    """Call before a key is sent (not while a measurement is running)."""
+    if _entry['busy'] or state.get('measuring'):
+        return
+    if key in DIGIT_KEYS:
+        if not _entry['digits']:
+            _entry['before'] = _screen_small()
+        _entry['digits'] += DIGIT_KEYS[key]
+    elif key != 'OK':
+        _entry['digits'] = ''
+
+
+def after_key(key, send):
+    """Call after a key is sent; send(key, delay) sends one key (used to send the channel again)."""
+    if key != 'OK' or not _entry['digits'] or _entry['busy'] or state.get('measuring'):
+        return
+    channel, before = _entry['digits'], _entry['before']
+    _entry['digits'], _entry['before'] = '', None
+    _entry['busy'] = True
+    try:
+        _verify_channel(channel, before, send)
+    finally:
+        _entry['busy'] = False
+
+
+def _changed(before, seconds=CHANGE_SECONDS):
+    if before is None:
+        return None
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        now = _screen_small()
+        if now is not None and float(np.mean(np.abs(now[0] - before[0]))) >= CHANGE_DIFF:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _send_channel(channel, send):
+    reverse = {v: k for k, v in DIGIT_KEYS.items()}
+    for char in channel:
+        send(reverse[char], 1)
+    send('OK', 2)
+
+
+def _verify_channel(channel, before, send):
+    changed = _changed(before)
+    if changed is False:
+        print(f"\n[CHANNEL CHECK] Channel {channel}: the screen did not change - sending it again.")
+        sound('attention')
+        before = _screen_small()
+        _send_channel(channel, send)
+        changed = _changed(before)
+        if changed is False:
+            print(f"[CHANNEL CHECK] Channel {channel}: still no change (already on it, or the keys were not "
+                  "received). Check the TV.")
+    elif changed:
+        print(f"[CHANNEL CHECK] Channel {channel}: the screen changed.")
+    if not QUICK['on'] or state['camera'] is None:
+        return
+    sound('attention')                         # quick flow check: the user confirms the channel
+    print(f"[CHANNEL CHECK] Is the TV on channel {channel}?  ENTER = yes, R = send it again, Q = stop")
+    while True:
+        now = _screen_small()
+        if now is not None:
+            cv2.imshow(WINDOW, _panel(now[1], [(f"Is the TV on channel {channel}?", (0, 255, 255), 0.6),
+                                               ("ENTER = yes   R = send again   Q = stop", (255, 255, 255), 0.55)]))
+        key = cv2.waitKey(50) & 0xFF
+        if key in (10, 13):
+            print(f"[CHANNEL CHECK] Channel {channel}: confirmed.")
+            return
+        if key in (ord('r'), ord('R')):
+            _send_channel(channel, send)
+        if key in (ord('q'), ord('Q')):
+            raise KeyboardInterrupt(f"Stopped at the channel {channel} check.")

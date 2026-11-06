@@ -162,9 +162,12 @@ STABLE_FRAMES = 5
 def send_key(ser, key_name, delay=2):
     """Send IR key command"""
     if key_name in IR_KEYS:
+        suite_progress.before_key(key_name)
         ser.write(IR_KEYS[key_name])
         ser.flush()
         time.sleep(delay)
+        # after Num keys + OK: check on the camera that the channel really changed (quick check: confirm)
+        suite_progress.after_key(key_name, lambda key, wait: send_key(ser, key, wait))
     else:
         print(f"⚠ Unknown key: {key_name}")
 
@@ -289,6 +292,7 @@ def main():
     
     # Initialize camera
     cap = initialize_camera()
+    suite_progress.state['camera'] = cap
 
     # Live TV is entered from Home ~4 min into the run (after the AC cycle): ask the route now
     lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, SoC,

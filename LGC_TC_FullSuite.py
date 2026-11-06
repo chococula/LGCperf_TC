@@ -80,9 +80,12 @@ ALL_TC_LABELS = ['TC01', 'TC02', 'TC03', 'TC04',
 
 def send_key(ser, key_name, delay=2):
     if key_name in IR_KEYS:
+        suite_progress.before_key(key_name)
         ser.write(IR_KEYS[key_name])
         ser.flush()
         time.sleep(delay)
+        # after Num keys + OK: check on the camera that the channel really changed (quick check: confirm)
+        suite_progress.after_key(key_name, lambda key, wait: send_key(ser, key, wait))
     else:
         print(f"⚠ Unknown key: {key_name}")
 
@@ -271,13 +274,18 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
     """End detection like the Omedia TCs (lgc_similarity.detect): CH+/CH- = the screen goes black, then the
     picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped."""
     suite_progress.step('measure', f"Measure ({trigger_key})")
+    suite_progress.state['measuring'] = True
     def press():
         winsound.Beep(800, 200)
         sent_at = time.perf_counter()
         send_key(ser, trigger_key, 0)
         return sent_at
-    return lgc_similarity.detect(cap, press, lambda: send_key(ser, trigger_key, 0), config['SoC'], run_idx,
-                                 dir_path, timeout, trigger_key, mode, target)
+    try:
+        return lgc_similarity.detect(cap, press, lambda: send_key(ser, trigger_key, 0), config['SoC'], run_idx,
+                                     dir_path, timeout, trigger_key, mode, target)
+    finally:
+        suite_progress.state['measuring'] = False
+        suite_progress._entry['digits'] = ''   # digits typed for a measured entry (TC04)
 
 
 def open_lg_channels(ser):
@@ -1345,6 +1353,7 @@ def main():
         print("="*60 + "\n")
 
     cap = initialize_camera()
+    suite_progress.state['camera'] = cap
 
     if do_cam_test == 'y':
         prev_gray = None
