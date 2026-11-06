@@ -287,6 +287,10 @@ def main():
     
     # Initialize camera
     cap = initialize_camera()
+
+    # Live TV is entered from Home ~4 min into the run (after the AC cycle): ask the route now
+    lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, SoC,
+                                    'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
     
     # CSV path
     csv_path = "tv_response.csv"

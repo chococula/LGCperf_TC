@@ -407,6 +407,36 @@ def has_landing(soc):
 ROUTE_KEYS = {'Up': 'DpadUp', 'Down': 'DpadDn', 'Left': 'DpadLt', 'Right': 'DpadRt'}
 
 
+def plan_route_from_home(send, cap, soc, name, what, fallback):
+    """At the start of a TC: the route from Home to `what` for this SoC, asked before the long run begins.
+
+    A saved route can be kept (Enter). Otherwise Home is opened and the user clicks the highlighted item and
+    the target (Omedia_TC02.select_plan; S keeps `fallback`). Only the route is saved - nothing is opened;
+    Exit closes Home again. navigate_from_home() later replays the saved route + OK.
+    """
+    settings = _settings()
+    routes = settings['models'].setdefault(soc, {}).setdefault('routes', {})
+    saved = routes.get(name)
+    if saved is not None:
+        attention()
+        keep = input(f"[NAV] Home -> {what} for {soc}: {', '.join(saved) or 'no move'} + OK. "
+                     "Keep it? (Y/n): ").strip().lower()
+        if keep in ('', 'y', 'yes'):
+            return saved
+    import Omedia_TC02 as planner
+    send('Home', 3)
+    attention()
+    print(f"\n[NAV] Click the highlighted item on Home, then {what}; arrow keys adjust, ENTER saves "
+          "(S = default keys).")
+    chosen = planner.select_plan(cap, 1, what, None)
+    route = list(fallback) if chosen is None else list(chosen[0])
+    routes[name] = route
+    save_configuration(SETTINGS_FILE, settings)
+    print(f"[NAV] Saved for {soc}: Home -> {', '.join(route) or 'no move'} + OK")
+    send('Exit', 2)
+    return route
+
+
 def navigate_from_home(send, cap, soc, name, what, fallback):
     """With Home on screen: move to an item and press OK, like the Omedia TCs.
 

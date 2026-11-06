@@ -1412,6 +1412,11 @@ def main():
         # TC01 / TC02 end = similarity with the LG Channels home (reference and TV screen area saved per SoC)
         lgc_similarity.prepare(cap, config['SoC'], lambda: open_lg_channels(ser))
 
+    if 'TC03' in selected_tcs:
+        # TC03 enters Live TV from Home ~4 min into the run (after the AC cycle): ask the route now
+        lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                        'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"
     os.makedirs("C:/Temp", exist_ok=True)
