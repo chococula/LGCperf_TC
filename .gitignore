@@ -10,3 +10,4 @@ ir_capture_*_raw.log
 # similarity reference and TV screen area (per machine / camera)
 LGC_Home_reference_*.jpg
 LGC_similarity_config.json
+LGC_*_reference_*.jpg

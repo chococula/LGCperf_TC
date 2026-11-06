@@ -12,6 +12,7 @@ import asyncio
 from kasa import SmartPlug
 import sys
 from config_store import remembered_input
+import lgc_similarity
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC5_NtN_inputs.json).
 input = remembered_input("LGC_TC5_NtN_inputs.json")
@@ -293,95 +294,17 @@ def initialize_camera(camera_index=1):
     print(f"✓ Camera initialized (index: {camera_index})")
     return cap
 
-def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp'): 
-    """
-    Perform motion detection measurement
-    """
-    print(f"\n[RUN {run_idx}] Motion detection starting...")
-    
-    # Get baseline frame
-    ret, frame = cap.read()
-    if not ret:
-        print(f"❌ Failed to read initial frame. Skipping run.")
-        return None
-    
-    prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    prev_gray = cv2.GaussianBlur(prev_gray, (5, 5), 0)
-    
-    motion_detected = False
-    frame_count = 0
-    elapsed_ms = 0.0
-    
-    # Skip first few frames
-    #for _ in range(3):
-    #    cap.grab()
-    
-    # Send the final key to trigger action
-    winsound.Beep(800, 200)
-    send_key(ser, trigger_key, 0)
-    ser.flush()
-    start_time = time.perf_counter()
-    
-    print(f"[RUN {run_idx}] Trigger key: {trigger_key}")
-    print(f"[RUN {run_idx}] Monitoring for motion...")
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print(f"❌ Frame read failed.")
-            break
-        
-        frame_count += 1
-        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        curr_gray_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
-        
-        # Calculate motion metrics
-        diff = cv2.absdiff(prev_gray, curr_gray_blur)
-        diff_score = np.mean(diff)
-        mean_val = np.mean(curr_gray)
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        
-        # Display info on frame
-        top_text = f"Time: {elapsed_ms:.2f}ms | Diff: {diff_score:.2f} | Frame: {frame_count}"
-        cv2.putText(curr_gray, top_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,), 1)
-        
-        # Save frame
-        file_name = os.path.join(dir_path, f"frame_{frame_count:04d}.jpg")
-        cv2.imwrite(file_name, curr_gray)
-        
-        # Check for motion detection
-        if diff_score > MOTION_THRESHOLD and mean_val > GRAY_THRESHOLD:
-            motion_detected = True
-            cv2.putText(curr_gray, "✓ MOTION DETECTED!", (10, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
-            cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
-            print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
-            winsound.Beep(1500, 250)
-            winsound.Beep(2500, 350)
-            break
-        
-        # Timeout check
-        if (time.perf_counter() - start_time) > timeout:
-            print(f"❌ [RUN {run_idx}] Timeout: No motion in {timeout} seconds")
-            break
-        
-        # Display
-        cv2.imshow('Motion Detection', curr_gray)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("User exit requested.")
-            cap.release()
-            cv2.destroyAllWindows()
-            sys.exit(0)
-        
-        prev_gray = curr_gray_blur
-    
-    return {
-        'run': run_idx,
-        'detected': motion_detected,
-        'response_time_ms': elapsed_ms,
-        'frame_count': frame_count,
-        'dir': dir_path
-    }
+def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp', mode=None,
+                             target=None):
+    """End detection like the Omedia TCs (lgc_similarity.detect): CH+/CH- = the screen goes black, then the
+    picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped."""
+    def press():
+        winsound.Beep(800, 200)
+        sent_at = time.perf_counter()
+        send_key(ser, trigger_key, 0)
+        return sent_at
+    return lgc_similarity.detect(cap, press, lambda: send_key(ser, trigger_key, 0), config['SoC'], run_idx,
+                                 dir_path, timeout, trigger_key, mode, target)
 
 
 # ===== Main Execution =====
@@ -471,8 +394,8 @@ def main():
             )
             
             if result:
-                result['source_channel'] = source_channel
-                result['target_channel'] = target_channel
+                result['source_channel'] = 'Native'
+                result['target_channel'] = native_previous_channel
                 results.append(result)
                 
                 # Save to CSV

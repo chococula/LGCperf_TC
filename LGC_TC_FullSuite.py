@@ -268,86 +268,17 @@ def initialize_camera(camera_index=0):
     print(f"✓ Camera initialized (index: {camera_index})")
     return cap
 
-def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK'):
-    print(f"\n[RUN {run_idx}] Motion detection starting...")
-
-    ret, frame = cap.read()
-    if not ret:
-        print(f"❌ Failed to read initial frame. Skipping run.")
-        return None
-
-    prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    prev_gray = cv2.GaussianBlur(prev_gray, (5, 5), 0)
-
-    motion_detected = False
-    frame_count = 0
-    elapsed_ms = 0.0
-
-    winsound.Beep(800, 200)
-    send_key(ser, trigger_key, 0)
-    ser.flush()
-    winsound.Beep(1200, 150)
-    start_time = time.perf_counter()
-
-    print(f"[RUN {run_idx}] Trigger key: {trigger_key}")
-    print(f"[RUN {run_idx}] Monitoring for motion...")
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print(f"❌ Frame read failed.")
-            break
-
-        frame_count += 1
-        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        curr_gray_blur = cv2.GaussianBlur(curr_gray, (5, 5), 0)
-
-        diff = cv2.absdiff(prev_gray, curr_gray_blur)
-        diff_score = np.mean(diff)
-        mean_val = np.mean(curr_gray)
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-
-        print(f"  ⏱ Elapsed: {elapsed_ms/1000:.2f}s | Diff: {diff_score:.2f} | Mean: {mean_val:.1f}", end="\r")
-
-        top_text = f"Time: {elapsed_ms:.2f}ms | Diff: {diff_score:.2f} | Frame: {frame_count}"
-        cv2.putText(curr_gray, top_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,), 1)
-
-        file_name = os.path.join(dir_path, f"frame_{frame_count:04d}.jpg")
-        cv2.imwrite(file_name, curr_gray)
-
-        if diff_score > MOTION_THRESHOLD and mean_val > GRAY_THRESHOLD:
-            motion_detected = True
-            cv2.putText(curr_gray, "✓ MOTION DETECTED!", (10, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,), 2)
-            cv2.imwrite(os.path.join(dir_path, "RESULT_HIT.jpg"), curr_gray)
-            print(f"✓ [RUN {run_idx}] Motion detected! Response time: {elapsed_ms:.2f}ms")
-            winsound.Beep(1500, 250)
-            winsound.Beep(2500, 350)
-            break
-
-        if (time.perf_counter() - start_time) > timeout:
-            print(f"❌ [RUN {run_idx}] Timeout: No motion in {timeout} seconds")
-            winsound.Beep(1000, 200)
-            winsound.Beep(1500, 250)
-            break
-
-        cv2.imshow('Motion Detection', curr_gray)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("User exit requested.")
-            cap.release()
-            cv2.destroyAllWindows()
-            sys.exit(0)
-
-        prev_gray = curr_gray_blur
-
-    return {
-        'run': run_idx,
-        'detected': motion_detected,
-        'response_time_ms': elapsed_ms,
-        'frame_count': frame_count,
-        'dir': dir_path,
-    }
-
+def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK', mode=None,
+                             target=None):
+    """End detection like the Omedia TCs (lgc_similarity.detect): CH+/CH- = the screen goes black, then the
+    picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped."""
+    def press():
+        winsound.Beep(800, 200)
+        sent_at = time.perf_counter()
+        send_key(ser, trigger_key, 0)
+        return sent_at
+    return lgc_similarity.detect(cap, press, lambda: send_key(ser, trigger_key, 0), config['SoC'], run_idx,
+                                 dir_path, timeout, trigger_key, mode, target)
 
 
 def open_lg_channels(ser):
@@ -707,7 +638,8 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
         cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
         os.makedirs(cycle_dir, exist_ok=True)
 
-        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key)
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key,
+                                          mode='channel')
         if result:
             result['source_channel'] = source
             result['target_channel'] = target
@@ -987,7 +919,8 @@ def run_tc06_07_08(ser, cap, config, run_idx, csv_path):
     send_key(ser, 'DpadDn', 1)
 
     # TC06 – OK to select Movies and TV
-    r1 = perform_motion_detection(ser, cap, run_idx, dir_path, timeout=25, config=config, trigger_key='OK')
+    r1 = perform_motion_detection(ser, cap, run_idx, dir_path, timeout=25, config=config, trigger_key='OK',
+                                  target='MovTV')
     if r1:
         r1['source_channel'] = 'LG Channels'
         r1['target_channel'] = 'Movies and TV'
