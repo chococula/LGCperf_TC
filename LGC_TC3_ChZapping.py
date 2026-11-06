@@ -14,6 +14,7 @@ from kasa import SmartPlug
 import sys
 from config_store import remembered_input
 import lgc_similarity
+import suite_progress
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC3_ChZapping_inputs.json).
 input = remembered_input("LGC_TC3_ChZapping_inputs.json")
@@ -200,8 +201,9 @@ def send_shell_command_with_debug(ser, command):
 
 def wait_with_countdown_noKeyInput(seconds, description="Timer"):
     """
-    Countdown timer without key input requirement
+    Countdown timer without key input requirement (shortened in the quick flow check)
     """
+    seconds = suite_progress.quick_seconds(seconds, description)
     winsound.Beep(1000, 200)
     print(f"\n[TIMER] {description}: {seconds} seconds")
     
@@ -224,7 +226,7 @@ async def run_ac_power_cycle(ip, off_seconds):
         await dev.turn_off()
         print(f"✓ Device powered OFF")
         
-        await asyncio.sleep(off_seconds)
+        await asyncio.sleep(suite_progress.quick_seconds(off_seconds, "AC power OFF"))
         
         await dev.turn_on()
         print(f"✓ Device powered ON")
@@ -293,7 +295,8 @@ def main():
                                     'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
     
     # CSV path
-    csv_path = "tv_response.csv"
+    quick = suite_progress.ask_quick()
+    csv_path = "tv_response_QUICK.csv" if quick else "tv_response.csv"
     results = []
     
     print(f"\n{'='*60}")

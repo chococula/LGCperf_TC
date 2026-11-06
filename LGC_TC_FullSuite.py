@@ -1399,6 +1399,7 @@ def main():
         sys.exit(0)
 
     config = get_user_configuration(selected_tcs)
+    quick = suite_progress.ask_quick()
 
     num_runs = config['num_runs']
     port     = config['port']
@@ -1418,7 +1419,7 @@ def main():
                                         'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
 
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"
+    csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}{'_QUICK' if quick else ''}.csv"
     os.makedirs("C:/Temp", exist_ok=True)
 
     all_results = []

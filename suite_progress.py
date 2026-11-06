@@ -11,6 +11,26 @@ import cv2
 import numpy as np
 
 WINDOW = "LGC FullSuite"
+# Quick flow check: the same keys and screens with short waits, to verify navigation before a real run.
+QUICK = {'on': False, 'wait': 10, 'boot': 60}
+BOOT_WORDS = ('power on', 'power stabilization', 'boot')    # the TV must finish booting: keep up to 60 s
+
+
+def ask_quick():
+    answer = input("Quick flow check with short waits (check navigation / screens, results not valid)? (y/N): ")
+    QUICK['on'] = answer.strip().lower() in ('y', 'yes')
+    if QUICK['on']:
+        print(f"[QUICK] Waits cut to {QUICK['wait']} s (boot waits after power on to {QUICK['boot']} s); "
+              "results go to a separate *_QUICK.csv.")
+    return QUICK['on']
+
+
+def quick_seconds(seconds, name):
+    """The wait to use: unchanged normally, shortened in the quick flow check."""
+    if not QUICK['on']:
+        return seconds
+    limit = QUICK['boot'] if any(word in name.lower() for word in BOOT_WORDS) else QUICK['wait']
+    return min(seconds, limit)
 state = {'tc_index': 0, 'tc_total': 0, 'tc_label': '', 'run_idx': 1, 'runs': 1,
          'steps': [], 'step': 0, 'step_name': '', 'camera': None, 'phase': ''}
 
@@ -51,7 +71,7 @@ def begin_tc(index, total, label, runs, camera=None):
 def begin_run(run_idx, steps, phase=''):
     """steps: [(kind, name, seconds)] from the dry run of this TC run (phase 'Setup' for the setup)."""
     state.update(run_idx=run_idx, steps=list(steps), step=0, step_name='', phase=phase)
-    total = sum(seconds for _, _, seconds in steps)
+    total = sum(quick_seconds(seconds, name) for _, name, seconds in steps)
     print(f"[PLAN] {state['tc_label']} {phase or f'run {run_idx}'}: {len(steps)} steps, about {_mmss(total)} of timed waits")
 
 
@@ -67,11 +87,11 @@ def step(kind, name):
 def header():
     s = state
     run = f" {s['phase']}" if s['phase'] else f" run {s['run_idx']}/{s['runs']}" if s['runs'] > 1 else ""
-    return f"TC {s['tc_index']}/{s['tc_total']} {s['tc_label']}{run} | Step {s['step']}/{len(s['steps'])}"
+    return f"{'[QUICK] ' if QUICK['on'] else ''}TC {s['tc_index']}/{s['tc_total']} {s['tc_label']}{run} | Step {s['step']}/{len(s['steps'])}"
 
 
 def remaining_after_current():
-    return sum(seconds for _, _, seconds in state['steps'][state['step']:])
+    return sum(quick_seconds(seconds, name) for _, name, seconds in state['steps'][state['step']:])
 
 
 def status_lines():
@@ -94,6 +114,7 @@ def countdown(seconds, name, as_step=True):
     if as_step:
         step('wait', name)
         sound('countdown_start')
+    seconds = quick_seconds(seconds, name)
     camera = state['camera']
     end = time.perf_counter() + seconds
     last_tick = None
