@@ -988,6 +988,10 @@ AREA_FILL_RISE = 30
 AREA_ONSET_STEP = 8             # the landing time is the first frame that moved this far from that frame
 AREA_PERSIST_SECONDS = 0.5      # ... and the area stays that different this long
 AREA_BLACK_FRAMES = 3           # black = this many frames in a row at the black level (not a frame of the fade)
+# Black is judged against the area before the key (the camera exposure lifts the black screen to 30-65 while
+# the frame chosen at setup may read ~3): a drop to AREA_BLACK_RATIO of it and by AREA_BLACK_DROP at least.
+AREA_BLACK_RATIO = 0.5
+AREA_BLACK_DROP = 30
 
 
 def _area_gray(frame, box):
@@ -1069,6 +1073,13 @@ def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at,
                     channel.draw_overlay(frame.copy(), [(f"RUN {run_idx}  BEFORE KEY  {ms / 1000.0:.3f} s",
                                                          (255, 255, 255), 1.4)]))
     phase, history, candidate, dark_run = 'waiting for black', [], None, 0
+    recent = [float(_area_gray(f, box).mean()) for t, f, _ in pre_frames if t >= key_at - 0.5] or              [float(_area_gray(f, box).mean()) for _, f, _ in list(pre_frames)[-15:]]
+    before = float(np.median(recent)) if recent else None
+    black_limit = dark_limit if before is None else max(dark_limit, min(before * AREA_BLACK_RATIO, before - AREA_BLACK_DROP))
+    if before is not None and before - AREA_BLACK_DROP <= dark_limit:
+        print(f"[RUN {run_idx}] The area is already dark before the key ({before:.0f}); black is not required.")
+        phase = 'black'
+    print(f"[RUN {run_idx}] Area before the key {before if before is None else round(before)}, black <= {black_limit:.0f}.")
     landed_ms, stop_at, count, last_ms, change = None, None, 0, 0.0, 0.0
     print(f"[RUN {run_idx}] Waiting for the area to go black, then fill with the picture...")
     try:
@@ -1085,10 +1096,12 @@ def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at,
             level = float(current.mean())
             if landed_ms is None:
                 if phase == 'waiting for black':
-                    dark_run = dark_run + 1 if ms >= CUT_MIN_REACTION_MS and level <= dark_limit else 0
+                    dark_run = dark_run + 1 if ms >= CUT_MIN_REACTION_MS and level <= black_limit else 0
                     if dark_run >= AREA_BLACK_FRAMES:
                         phase, history = 'black', [(ms, current)]
                 else:
+                    if not history:
+                        history = [(ms, current)]
                     def moved(a, ref):
                         return max(_pattern(a, ref), abs(float(a.mean()) - float(ref.mean())) * AREA_FILL_STEP / AREA_FILL_RISE)
                     history = (history + [(ms, current)])[-60:]
@@ -1111,7 +1124,7 @@ def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at,
                             winsound.Beep(2500, 350)
             color = (0, 255, 0) if landed_ms is not None else (0, 255, 255)
             lines = [(f"RUN {run_idx}  #{count}  TIMER {ms / 1000.0:.3f} s", color, 1.4),
-                     (f"Area {level:.0f} (black <= {dark_limit:.0f})  change {change:.0f} / {AREA_FILL_STEP}  "
+                     (f"Area {level:.0f} (black <= {black_limit:.0f})  change {change:.0f} / {AREA_FILL_STEP}  "
                       f"[{'landed' if landed_ms is not None else phase}]", color, 1.0)]
             if landed_ms is not None:
                 lines.append((f"LANDED at {landed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))

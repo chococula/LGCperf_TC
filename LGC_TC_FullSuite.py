@@ -637,6 +637,8 @@ TC05_KINDS = {'TC05_NtN': ('Native', 'Native'), 'TC05_NtP': ('Native', 'Pluto'),
 TC05_REPEAT = {'TC05_NtN': TC05_NTN_REPEAT_COUNT, 'TC05_NtP': 5, 'TC05_PtP': 5}
 TC05_PAIR_KEY = {'TC05_NtN': 'ntn_pair', 'TC05_NtP': 'ntp_pair', 'TC05_PtP': 'ptp_pair'}
 OPPOSITE_KEY = {'ChUp': 'ChDown', 'ChDown': 'ChUp'}
+TC05_AFTER_MEASURE_SECONDS = 5   # after each measurement: the channel plays before the next keys
+TC05_DIGIT_GAP = 0.5               # seconds between the digits of a channel number in LG Channels
 
 
 def _tc05_live_precondition(ser, cap, config, first_channel):
@@ -667,7 +669,7 @@ def _tc05_live_precondition(ser, cap, config, first_channel):
 
     print(f"\n[STEP] Channel {first_channel}")
     send_key(ser, 'Num_00', 1.5)   # throwaway digit: the first key lands before the entry field is ready
-    go_to_channel(ser, first_channel, delay=1)
+    go_to_channel(ser, first_channel, delay=TC05_DIGIT_GAP)
     wait_with_countdown_noKeyInput(10, f"Channel {first_channel}")
 
 
@@ -683,7 +685,7 @@ def prepare_black_area(ser, cap, config, label, key, src):
     """Once per SoC: one unmeasured key from the From channel, the user picks the black / logo screen and the
     black area; back on the From channel by number."""
     def back():
-        go_to_channel(ser, src, delay=1)
+        go_to_channel(ser, src, delay=TC05_DIGIT_GAP)
         wait_with_countdown_noKeyInput(10, f"Back on {src}")
     lgc_similarity.ensure_black_area(cap, config['SoC'], label.lower(), f"{label} {key}",
                                      lambda: send_key(ser, key, 0), back)
@@ -718,7 +720,7 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
         if by_reverse:
             send_key(ser, OPPOSITE_KEY[key], 0)
         else:
-            go_to_channel(ser, src, delay=1)
+            go_to_channel(ser, src, delay=TC05_DIGIT_GAP)
         wait_with_countdown_noKeyInput(10, f"{from_kind} {src}")
 
         print(f"[{label}] Measuring {key}: {from_kind} {src} -> {to_kind} {dst}")
@@ -734,8 +736,9 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
             result['source_channel'] = src
             result['target_channel'] = dst
             results.append(result)
-        if by_reverse:
-            wait_with_countdown_noKeyInput(5, f"{to_kind} {dst}")
+        # Let the new channel finish starting before the next keys: number keys sent while the stream is
+        # still starting lose their first digit (163 arrived as 63).
+        wait_with_countdown_noKeyInput(TC05_AFTER_MEASURE_SECONDS, f"{to_kind} {dst} playing")
 
     return results
 

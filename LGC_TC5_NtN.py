@@ -257,7 +257,7 @@ def channel_to_keys(channel):
     return [CHANNEL_KEY_MAP[char] for char in str(channel)]
 
 
-def go_to_channel(ser, channel, delay=1):
+def go_to_channel(ser, channel, delay=0.5):
     print(f"  > Navigating to channel {channel}")
     for key_name in channel_to_keys(channel):
         send_key(ser, key_name, delay)
@@ -348,7 +348,7 @@ def main():
 
     print(f"\n[STEP] Channel {t2_channel}")
     send_key(ser, 'Num_00', 1.5)   # throwaway digit: the first key lands before the entry field is ready
-    go_to_channel(ser, t2_channel, delay=1)
+    go_to_channel(ser, t2_channel, delay=0.5)
     wait_with_countdown_noKeyInput(10, f"Native {t2_channel}")
 
     # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).

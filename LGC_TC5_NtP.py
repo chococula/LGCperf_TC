@@ -257,7 +257,7 @@ def channel_to_keys(channel):
     return [CHANNEL_KEY_MAP[char] for char in str(channel)]
 
 
-def go_to_channel(ser, channel, delay=1):
+def go_to_channel(ser, channel, delay=0.5):
     print(f"  > Navigating to channel {channel}")
     for key_name in channel_to_keys(channel):
         send_key(ser, key_name, delay)
@@ -348,13 +348,13 @@ def main():
 
     print(f"\n[STEP] {FROM_KIND} channel {src}")
     send_key(ser, 'Num_00', 1.5)   # throwaway digit: the first key lands before the entry field is ready
-    go_to_channel(ser, src, delay=1)
+    go_to_channel(ser, src, delay=0.5)
     wait_with_countdown_noKeyInput(10, f"{FROM_KIND} {src}")
 
     # One-time per SoC: the black area of the black / logo screen before the Pluto picture
     # (one unmeasured key, the user picks the frame and drags the area, then back on the From channel).
     def back_on_src():
-        go_to_channel(ser, src, delay=1)
+        go_to_channel(ser, src, delay=0.5)
         wait_with_countdown_noKeyInput(10, f"Back on {src}")
     lgc_similarity.ensure_black_area(cap, config['SoC'], LABEL.lower(), f"{LABEL} {measure_key}",
                                      lambda: send_key(ser, measure_key, 0), back_on_src)
@@ -377,7 +377,7 @@ def main():
         print(f"Output directory: {dir_path}")
         
         try:
-            go_to_channel(ser, src, delay=1)
+            go_to_channel(ser, src, delay=0.5)
             wait_with_countdown_noKeyInput(10, f"{FROM_KIND} {src}")
 
             # Measured: ChUp / ChDown from the From channel into the To channel
@@ -410,7 +410,8 @@ def main():
         # Wait before next run
         if run_idx < num_runs:
             
-            wait_with_countdown_noKeyInput(5, f"{TO_KIND} {dst}")
+            # the channel finishes starting before the next number keys (else the first digit is lost)
+            wait_with_countdown_noKeyInput(5, f"{TO_KIND} {dst} playing")
 
     suite_progress.sound('all_done')
 
