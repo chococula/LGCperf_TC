@@ -975,18 +975,204 @@ class FreezeCut:
         return None
 
 
+# ---------- black area: the picture must fill an area that is black while the new channel loads ----------
+# (Native -> Pluto: black screen + channel banner / Pluto logo first; a cut to it is not the new picture)
+AREA_SETUP_SECONDS = 8.0        # frames recorded after the unmeasured change to pick the black screen from
+AREA_DARK_MARGIN = 15           # the area counts as black up to its level on the chosen frame + this
+# The black screen is not steady: the camera exposure lifts it in steps (~+10 at a time, 26 -> 74 in 1.5 s)
+# and the menu / banner appear. The picture arriving is a sudden change of the area: against the frame
+# AREA_STEP_MS earlier, the pattern (mean removed) moves >= AREA_FILL_STEP or the level >= AREA_FILL_RISE.
+AREA_STEP_MS = 200
+AREA_FILL_STEP = 15
+AREA_FILL_RISE = 30
+AREA_ONSET_STEP = 8             # the landing time is the first frame that moved this far from that frame
+AREA_PERSIST_SECONDS = 0.5      # ... and the area stays that different this long
+AREA_BLACK_FRAMES = 3           # black = this many frames in a row at the black level (not a frame of the fade)
+
+
+def _area_gray(frame, box):
+    x, y, w, h = box
+    gray = cv2.GaussianBlur(cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY), (9, 9), 0)
+    return cv2.resize(gray, (max(8, w // 4), max(8, h // 4)), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
+def _pattern(area, reference):
+    """Change of the picture in the area with each one's mean brightness removed."""
+    return float(np.mean(np.abs((area - area.mean()) - (reference - reference.mean()))))
+
+
+def has_black_area(soc, name):
+    return bool(((_settings()['models'].get(soc) or {}).get('black_areas') or {}).get(name))
+
+
+def ensure_black_area(cap, soc, name, what, change_once, back):
+    """Once per SoC and test: one unmeasured change (change_once), the frames of the next 8 s are kept and the
+    user picks the black / logo screen (arrows step, starts at the darkest), then drags an area that is
+    BLACK there (not the logo or banner) and filled by the picture when the channel plays. back() returns
+    to the start channel. Saved as models[soc]['black_areas'][name] = {'box', 'dark'}."""
+    settings = _settings()
+    areas = settings['models'].setdefault(soc, {}).setdefault('black_areas', {})
+    if areas.get(name):
+        return areas[name]
+    screen = ensure_screen(cap, soc)
+    print(f"\n[AREA] {what}: one unmeasured change to choose the black area.")
+    change_once()
+    started, frames = time.perf_counter(), []
+    while time.perf_counter() - started < AREA_SETUP_SECONDS:
+        frame = _read(cap)
+        frames.append((time.perf_counter() - started, frame))
+        cv2.imshow(WINDOW, _overlay(frame, [("Recording the channel change...", (0, 255, 255), 0.8)]))
+        cv2.waitKey(1)
+    x, y, w, h = screen
+    levels = [float(cv2.cvtColor(f[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY).mean()) for _, f in frames]
+    index = int(np.argmin(levels))
+    attention()
+    print("[AREA] Left / Right = step through the frames, ENTER = the frame with the black / logo screen.")
+    import Omedia_TC02 as planner                      # arrow-key codes only
+    window = "Pick the black / logo screen"
+    while True:
+        t, frame = frames[index]
+        cv2.imshow(window, _overlay(frame, [
+            (f"Frame {index + 1}/{len(frames)}  +{t:.2f} s after the key", (0, 255, 255), 0.7),
+            ("Left / Right = step   ENTER = this black / logo screen", (255, 255, 255), 0.6)]))
+        code = cv2.waitKeyEx(30)
+        key = planner.ARROW_KEYS.get(code)
+        if key == 'Left':
+            index = max(0, index - 1)
+        elif key == 'Right':
+            index = min(len(frames) - 1, index + 1)
+        elif code in (10, 13):
+            break
+    _close(window)
+    box = _select(cap, "Select the black area, then ENTER",
+                  "Drag over an area that is BLACK here (not the logo or banner) and filled when the picture plays.",
+                  frame=frames[index][1])
+    dark = float(_area_gray(frames[index][1], box).mean())
+    settings = _settings()
+    settings['models'].setdefault(soc, {}).setdefault('black_areas', {})[name] = {'box': box, 'dark': dark}
+    save_configuration(SETTINGS_FILE, settings)
+    print(f"[AREA] Saved for {soc} / {name}: {box} (black level {dark:.0f}).")
+    back()
+    return settings['models'][soc]['black_areas'][name]
+
+
+def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at, pre_frames):
+    """Time from the key until the picture fills the black area (after the area went black)."""
+    import Omedia_TC02 as channel
+    box = area['box']
+    x, y, w, h = box
+    dark_limit = area['dark'] + AREA_DARK_MARGIN
+    writer = channel.FrameWriter(os.path.join(out_dir, "frames"))
+    for index, (captured_at, frame, _) in enumerate(pre_frames, 1):
+        ms = (captured_at - key_at) * 1000.0
+        writer.save(f"frame_p{index:04d}_{ms:09.1f}ms_sim0.000.jpg",
+                    channel.draw_overlay(frame.copy(), [(f"RUN {run_idx}  BEFORE KEY  {ms / 1000.0:.3f} s",
+                                                         (255, 255, 255), 1.4)]))
+    phase, history, candidate, dark_run = 'waiting for black', [], None, 0
+    landed_ms, stop_at, count, last_ms, change = None, None, 0, 0.0, 0.0
+    print(f"[RUN {run_idx}] Waiting for the area to go black, then fill with the picture...")
+    try:
+        while time.perf_counter() - key_at <= timeout:
+            captured = capture.get_frame()
+            if captured is None:
+                continue
+            captured_at, frame = captured
+            if captured_at < key_at:
+                continue
+            count += 1
+            last_ms = ms = (captured_at - key_at) * 1000.0
+            current = _area_gray(frame, box)
+            level = float(current.mean())
+            if landed_ms is None:
+                if phase == 'waiting for black':
+                    dark_run = dark_run + 1 if ms >= CUT_MIN_REACTION_MS and level <= dark_limit else 0
+                    if dark_run >= AREA_BLACK_FRAMES:
+                        phase, history = 'black', [(ms, current)]
+                else:
+                    def moved(a, ref):
+                        return max(_pattern(a, ref), abs(float(a.mean()) - float(ref.mean())) * AREA_FILL_STEP / AREA_FILL_RISE)
+                    history = (history + [(ms, current)])[-60:]
+                    earlier = [(t, a) for t, a in history if t <= ms - AREA_STEP_MS]
+                    if candidate is None:
+                        change = moved(current, earlier[-1][1]) if earlier else 0.0
+                        if change >= AREA_FILL_STEP:
+                            ref_t, ref = earlier[-1]
+                            onset = next((t for t, a in history if t > ref_t and moved(a, ref) >= AREA_ONSET_STEP), ms)
+                            candidate, phase = (onset, ref), 'filling'
+                    else:
+                        change = moved(current, candidate[1])
+                        if change < AREA_FILL_STEP * 0.6:
+                            candidate, phase = None, 'black'    # went back (a flash)
+                        elif ms - candidate[0] >= AREA_PERSIST_SECONDS * 1000.0:
+                            landed_ms = candidate[0]
+                            stop_at = ms + channel.STREAM_EXTRA_SECONDS * 1000.0
+                            print(f"[RUN {run_idx}] Landed at {landed_ms:.2f} ms.")
+                            winsound.Beep(1500, 250)
+                            winsound.Beep(2500, 350)
+            color = (0, 255, 0) if landed_ms is not None else (0, 255, 255)
+            lines = [(f"RUN {run_idx}  #{count}  TIMER {ms / 1000.0:.3f} s", color, 1.4),
+                     (f"Area {level:.0f} (black <= {dark_limit:.0f})  change {change:.0f} / {AREA_FILL_STEP}  "
+                      f"[{'landed' if landed_ms is not None else phase}]", color, 1.0)]
+            if landed_ms is not None:
+                lines.append((f"LANDED at {landed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+            image = frame.copy()
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 255), 2)
+            writer.save(f"frame_{count:05d}_{ms:09.1f}ms_sim{min(change / AREA_FILL_STEP, 9.999):.3f}.jpg",
+                        channel.draw_overlay(image.copy(), lines))
+            cv2.imshow(channel.CAPTURE_WINDOW, channel.draw_overlay(image, lines + list(STATUS())))
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                raise KeyboardInterrupt("Measurement canceled by user.")
+            if stop_at is not None and ms >= stop_at:
+                break
+    finally:
+        writer.close()
+    if landed_ms is None:
+        print(f"[RUN {run_idx}] No picture in the black area within {timeout:g} s"
+              + (" (the area never went black)." if phase == 'waiting for black' else "."))
+        winsound.Beep(400, 700)
+    return {'status': 'PASS' if landed_ms is not None else 'FAIL',
+            'response_time_ms': landed_ms if landed_ms is not None else last_ms, 'frame_count': count}
+
+
+def measure_black_area(cap, press_key, soc, name, out_dir, timeout, run_idx, run_label="RUN"):
+    """The landing = the picture filling the saved black area of test `name` (ensure_black_area first)."""
+    import Omedia_TC02 as channel
+    area = ((_settings()['models'].get(soc) or {}).get('black_areas') or {}).get(name)
+    if not area:
+        raise RuntimeError(f"No black area saved for {soc} / {name} (ensure_black_area first).")
+    capture = channel.CameraFrameCapture(cap)
+    capture.start()
+    try:
+        pre_frames, _, _ = channel.capture_pre_roll(capture, area['box'])
+        capture.clear_buffer()
+        key_at = press_key()
+        result = _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at, pre_frames)
+    finally:
+        capture.stop()
+    detected = result['status'] == 'PASS'
+    try:
+        make_run_videos(out_dir, run_label=run_label, end_ms=result['response_time_ms'] if detected else None)
+    except Exception as error:
+        print(f"[{run_label}] Video not made: {error}")
+    return {'detected': detected, 'response_time_ms': result['response_time_ms'],
+            'frame_count': result['frame_count'], 'dir': out_dir, 'method': 'black-area'}
+
+
 CHANNEL_KEYS = ('ChUp', 'ChDown')
 SCROLL_KEYS = ('DpadUp', 'DpadDn', 'DpadLt', 'DpadRt')
 
 
 def detect(cap, press_key, resend_key, soc, run_idx, out_dir, timeout, trigger_key, mode=None, target=None,
            run_label=None):
-    """Pick the method: mode 'channel' | 'settle' | 'similarity' (default from the key: CH+/CH- -> channel,
-    arrows -> settle, others -> similarity with target, default the LG Channels home)."""
+    """Pick the method: mode 'channel' | 'area' | 'settle' | 'similarity' (default from the key: CH+/CH- ->
+    channel, arrows -> settle, others -> similarity with target, default the LG Channels home).
+    'area': the picture fills the black area saved for test `target` (ensure_black_area)."""
     run_label = run_label or f"RUN {run_idx}"
     mode = mode or ('channel' if trigger_key in CHANNEL_KEYS else 'settle' if trigger_key in SCROLL_KEYS
                     else 'similarity')
-    if mode == 'channel':
+    if mode == 'area':
+        result = measure_black_area(cap, press_key, soc, target, out_dir, timeout, run_idx, run_label)
+    elif mode == 'channel':
         result = measure_channel(cap, press_key, resend_key, soc, out_dir, timeout, run_idx, run_label)
     else:
         result = measure(cap, press_key, soc, out_dir, timeout, run_label,

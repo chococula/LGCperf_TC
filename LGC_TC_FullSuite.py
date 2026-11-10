@@ -671,6 +671,24 @@ def _tc05_live_precondition(ser, cap, config, first_channel):
     wait_with_countdown_noKeyInput(10, f"Channel {first_channel}")
 
 
+TC05_BLACK_AREA = ('TC05_NtP', 'TC05_PtP')   # Pluto shows a black / logo screen first: judged by the black area
+
+
+def show_tc05_channels(label, pair, from_kind, to_kind):
+    """The channels a TC05 case uses, checked on the lineup (printed before it runs)."""
+    lgc_lineup.show(label, pair, from_kind, to_kind)
+
+
+def prepare_black_area(ser, cap, config, label, key, src):
+    """Once per SoC: one unmeasured key from the From channel, the user picks the black / logo screen and the
+    black area; back on the From channel by number."""
+    def back():
+        go_to_channel(ser, src, delay=1)
+        wait_with_countdown_noKeyInput(10, f"Back on {src}")
+    lgc_similarity.ensure_black_area(cap, config['SoC'], label.lower(), f"{label} {key}",
+                                     lambda: send_key(ser, key, 0), back)
+
+
 def _run_tc05(ser, cap, config, run_idx, csv_path, label):
     """One TC05 case with the pair chosen from the lineup: From --key--> To is measured 5 times.
     NtN (like TC03): on To, the opposite key (unmeasured) goes to From, 10 s, the key back to To is measured.
@@ -679,15 +697,20 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
     pair = config[TC05_PAIR_KEY[label]]
     src, key, dst = pair['from'], pair['key'], pair['to']
     from_kind, to_kind = TC05_KINDS[label]
-    lgc_lineup.show(label, pair, from_kind, to_kind)          # the channels used, checked on the lineup
+    show_tc05_channels(label, pair, from_kind, to_kind)       # the channels used, checked on the lineup
     ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_dir = make_dir("C:/Temp", f"LGC_Perf_{label}", run_idx, ts_run, config)
     print(f"Output directory: {base_dir}")
 
     by_reverse = label == 'TC05_NtN'
     _tc05_live_precondition(ser, cap, config, dst if by_reverse else src)
-    # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
-    prepare_channel_landing(ser, cap, config)
+    black_area = label in TC05_BLACK_AREA
+    if black_area:
+        # One-time per SoC: the black area of the black / logo screen (one unmeasured key, then back).
+        prepare_black_area(ser, cap, config, label, key, src)
+    else:
+        # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
+        prepare_channel_landing(ser, cap, config)
 
     results = []
     for cycle_idx in range(1, TC05_REPEAT[label] + 1):
@@ -701,7 +724,9 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
         print(f"[{label}] Measuring {key}: {from_kind} {src} -> {to_kind} {dst}")
         cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
         os.makedirs(cycle_dir, exist_ok=True)
-        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key=key)
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key=key,
+                                          mode='area' if black_area else None,
+                                          target=label.lower() if black_area else None)
         save_result(result, ts_run, csv_path, label,
                     extra_cols={'Cycle': cycle_idx, 'From_Ch': src, 'To_Ch': dst, 'Key': key})
         if result:

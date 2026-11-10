@@ -190,6 +190,8 @@ def plan_steps(module, run_fn, args, extra_patches=()):
         (module, 'save_result', lambda *a, **k: None),
         (module, 'make_dir', lambda *a, **k: _scratch()),
         (module, 'prepare_channel_landing', lambda *a, **k: None),
+        (module, 'prepare_black_area', lambda *a, **k: None),
+        (module, 'show_tc05_channels', lambda *a, **k: None),
     ] + list(extra_patches)
     saved = []
     for obj, name, fn in patches:

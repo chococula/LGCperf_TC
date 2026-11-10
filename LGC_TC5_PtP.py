@@ -351,12 +351,13 @@ def main():
     go_to_channel(ser, src, delay=1)
     wait_with_countdown_noKeyInput(10, f"{FROM_KIND} {src}")
 
-    # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
-    lgc_similarity.ensure_screen(cap, config['SoC'])
-    if not lgc_similarity.has_landing(config['SoC']):
-        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
-        send_key(ser, 'ChUp', 0)
+    # One-time per SoC: the black area of the black / logo screen before the Pluto picture
+    # (one unmeasured key, the user picks the frame and drags the area, then back on the From channel).
+    def back_on_src():
+        go_to_channel(ser, src, delay=1)
         wait_with_countdown_noKeyInput(10, f"Back on {src}")
+    lgc_similarity.ensure_black_area(cap, config['SoC'], LABEL.lower(), f"{LABEL} {measure_key}",
+                                     lambda: send_key(ser, measure_key, 0), back_on_src)
 
     for run_idx in range(1, num_runs + 1):
         print(f"\n{'='*60}")
@@ -381,7 +382,8 @@ def main():
 
             # Measured: ChUp / ChDown from the From channel into the To channel
             print(f"[RUN {run_idx}] Measuring {measure_key}: {FROM_KIND} {src} -> {TO_KIND} {dst}")
-            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key=measure_key)
+            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key=measure_key,
+                                              mode='area', target=LABEL.lower())
             
             if result:
                 results.append(result)
