@@ -14,6 +14,7 @@ from kasa import SmartPlug
 import sys
 from config_store import remembered_input
 import lgc_similarity
+import suite_progress
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC11_realWorld02_inputs.json).
 input = remembered_input("LGC_TC11_realWorld02_inputs.json")
@@ -215,19 +216,9 @@ def send_shell_command_with_debug(ser, command):
 
 
 def wait_with_countdown_noKeyInput(seconds, description="Timer"):
-    """
-    Countdown timer without key input requirement
-    """
-    winsound.Beep(1000, 200)
-    print(f"\n[TIMER] {description}: {seconds} seconds")
-
-    for remaining in range(seconds, 0, -1):
-        print(f"  ⏱ {remaining} seconds remaining...", end="\r")
-        time.sleep(1)
-
-    print(" " * 50, end="\r")
-    winsound.Beep(1500, 300)
-    print(f"[TIMER] ✓ {description} Complete!\n")
+    """Timed wait: camera view with run / step / time left, sounds at start, last 3 s and end
+    (shortened in the quick flow check)."""
+    suite_progress.countdown(seconds, description)
 
 
 def wait_for_screen_stable(cap, timeout=60, stable_threshold=3.0, min_stable_duration=4.0):
@@ -309,11 +300,13 @@ async def run_ac_power_cycle(ip, off_seconds):
         dev = SmartPlug(ip)
         await dev.update()
         await dev.turn_off()
+        suite_progress.sound('ac_off')
         print(f"✓ Device powered OFF")
         
-        await asyncio.sleep(off_seconds)
+        suite_progress.countdown(off_seconds, "AC power OFF", as_step=False)
         
         await dev.turn_on()
+        suite_progress.sound('ac_on')
         print(f"✓ Device powered ON")
     except Exception as e:
         print(f"❌ Power cycle failed: {e}")
@@ -358,6 +351,7 @@ def main():
     
     # Initialize camera
     cap = initialize_camera()
+    suite_progress.begin_tc(1, 1, "TC11_realWorld02", num_runs, cap)
     
     # CSV path
     csv_path = "tv_response.csv"
@@ -372,6 +366,9 @@ def main():
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
         print(f"{'='*60}")
+        suite_progress.state.update(run_idx=run_idx, steps=[], step=0)
+        if run_idx > 1:
+            suite_progress.sound('tc_start')
         
         # Create run directory
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -468,7 +465,9 @@ def main():
             send_key(ser, 'DpadUp', 2)
             send_key(ser, 'DpadUp', 2)
             send_key(ser, 'OK', 2)
-    
+
+    suite_progress.sound('all_done')
+
     # Summary
     print(f"\n{'='*60}")
     print(f"  Test Complete - Summary")

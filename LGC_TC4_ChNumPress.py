@@ -6,7 +6,6 @@ import pandas as pd
 import serial
 import os
 import config as cfg
-import random
 from datetime import datetime
 import winsound
 import keyboard
@@ -15,6 +14,7 @@ from kasa import SmartPlug
 import sys
 from config_store import remembered_input
 import lgc_similarity
+import suite_progress
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC4_ChNumPress_inputs.json).
 input = remembered_input("LGC_TC4_ChNumPress_inputs.json")
@@ -25,7 +25,7 @@ def get_user_configuration():
     Interactive configuration input from user
     """
     print("\n" + "="*60)
-    print("  LG TV Cold Boot Performance Test - Configuration")
+    print("  LG TV Channel Number Press Performance Test - Configuration")
     print("="*60 + "\n")
     
     # Device IP
@@ -52,10 +52,10 @@ def get_user_configuration():
     SoC = input("Enter SoC Model (default: O22N3): ").strip() or "O22N3"
     
     # Software Version
-    SWV = input("Enter Software Version (default: 33.31.22): ").strip() or "33.31.22"
+    SWV = input("Enter Software Version (default: 33.31.22): ").strip() or "33_30_97"
     
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4.0.18-1"
+    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4_0_7-2"
     
     # Number of runs
     while True:
@@ -153,24 +153,6 @@ IR_KEYS = {
     'BLU': b'mc 00 61\n',
 }
 
-SOURCE_CHANNEL = "11-1"
-TARGET_CHANNEL = "450"
-USE_OK_TO_SELECT_CHANNEL = True
-
-CHANNEL_KEY_MAP = {
-    '0': 'Num_00',
-    '1': 'Num_01',
-    '2': 'Num_02',
-    '3': 'Num_03',
-    '4': 'Num_04',
-    '5': 'Num_05',
-    '6': 'Num_06',
-    '7': 'Num_07',
-    '8': 'Num_08',
-    '9': 'Num_09',
-    '-': 'DASH',
-}
-
 # ===== Measurement Thresholds =====
 GRAY_THRESHOLD = 150
 MOTION_THRESHOLD = 150
@@ -180,50 +162,14 @@ STABLE_FRAMES = 5
 def send_key(ser, key_name, delay=2):
     """Send IR key command"""
     if key_name in IR_KEYS:
+        suite_progress.before_key(key_name)
         ser.write(IR_KEYS[key_name])
         ser.flush()
         time.sleep(delay)
+        # after Num keys + OK: check on the camera that the channel really changed (quick check: confirm)
+        suite_progress.after_key(key_name, lambda key, wait: send_key(ser, key, wait))
     else:
         print(f"⚠ Unknown key: {key_name}")
-
-
-def send_key_human_like(ser, key_name, delay_range=(0.25, 0.75)):
-    """
-    Send one key with a small randomized interval, closer to real remote input.
-    """
-    send_key(ser, key_name, 0)
-    time.sleep(random.uniform(*delay_range))
-
-
-def channel_to_keys(channel):
-    """
-    Convert a channel string like '450' or '11-1' to IR key names.
-    """
-    keys = []
-    for char in str(channel):
-        if char not in CHANNEL_KEY_MAP:
-            raise ValueError(f"Unsupported channel character: {char}")
-        keys.append(CHANNEL_KEY_MAP[char])
-    return keys
-
-
-def prepare_channel_input(ser, channel, delay_range=(0.35, 0.9), confirm_with_ok=True):
-    """
-    Enter the channel like a user would. If confirm_with_ok is True, OK is the
-    measurement trigger. Otherwise the final channel digit is the trigger.
-    """
-    keys = channel_to_keys(channel)
-    if confirm_with_ok:
-        for key_name in keys:
-            send_key_human_like(ser, key_name, delay_range)
-        return keys, 'OK'
-
-    if len(keys) <= 1:
-        return [], keys[0]
-
-    for key_name in keys[:-1]:
-        send_key_human_like(ser, key_name, delay_range)
-    return keys[:-1], keys[-1]
 
 
 def send_shell_command_with_debug(ser, command):
@@ -257,19 +203,9 @@ def send_shell_command_with_debug(ser, command):
 
 
 def wait_with_countdown_noKeyInput(seconds, description="Timer"):
-    """
-    Countdown timer without key input requirement
-    """
-    winsound.Beep(1000, 200)
-    print(f"\n[TIMER] {description}: {seconds} seconds")
-    
-    for remaining in range(seconds, 0, -1):
-        print(f"  ⏱ {remaining} seconds remaining...", end="\r")
-        time.sleep(1)
-    
-    print(" " * 50, end="\r")
-    winsound.Beep(1500, 300)
-    print(f"[TIMER] ✓ {description} Complete!\n")
+    """Timed wait: camera view with run / step / time left, sounds at start, last 3 s and end
+    (shortened in the quick flow check)."""
+    suite_progress.countdown(seconds, description)
 
 
 async def run_ac_power_cycle(ip, off_seconds):
@@ -280,11 +216,13 @@ async def run_ac_power_cycle(ip, off_seconds):
         dev = SmartPlug(ip)
         await dev.update()
         await dev.turn_off()
+        suite_progress.sound('ac_off')
         print(f"✓ Device powered OFF")
         
-        await asyncio.sleep(off_seconds)
+        suite_progress.countdown(off_seconds, "AC power OFF", as_step=False)
         
         await dev.turn_on()
+        suite_progress.sound('ac_on')
         print(f"✓ Device powered ON")
     except Exception as e:
         print(f"❌ Power cycle failed: {e}")
@@ -295,7 +233,7 @@ def initialize_camera(camera_index=1):
     return open_camera(camera_index)
 
 
-def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK', mode='channel',
+def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp', mode=None,
                              target=None):
     """End detection like the Omedia TCs (lgc_similarity.detect): CH+/CH- = the screen goes black, then the
     picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped."""
@@ -310,14 +248,19 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
 
 # ===== Main Execution =====
 
-def prepare_channel_landing(ser, cap, config):
-    """Once per SoC: the TV screen box and the landing area, with an unmeasured ChDown and ChUp back, so the
-    channel the test runs on is the same afterwards. Does nothing when both are saved."""
-    lgc_similarity.ensure_screen(cap, config['SoC'])
-    if not lgc_similarity.has_landing(config['SoC']):
-        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
-        send_key(ser, 'ChUp', 0)
-        wait_with_countdown_noKeyInput(10, "Back on the test channel")
+CHANNEL_KEY_MAP = {str(d): f'Num_0{d}' for d in range(10)}
+CHANNEL_KEY_MAP['-'] = 'DASH'
+
+
+def channel_to_keys(channel):
+    return [CHANNEL_KEY_MAP[char] for char in str(channel)]
+
+
+def go_to_channel(ser, channel, delay=1):
+    print(f"  > Navigating to channel {channel}")
+    for key_name in channel_to_keys(channel):
+        send_key(ser, key_name, delay)
+    send_key(ser, 'OK', 0)
 
 
 def main():
@@ -340,49 +283,57 @@ def main():
     
     # Initialize camera
     cap = initialize_camera()
+    suite_progress.state['camera'] = cap
+    suite_progress.begin_tc(1, 1, "TC4_ChNumPress", num_runs, cap)
+
+    # Live TV is entered from Home ~4 min into the run (after the AC cycle): ask the route now
+    lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, SoC,
+                                    'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
     
     # CSV path
-    csv_path = "tv_response.csv"
+    quick = suite_progress.ask_quick()
+    csv_path = "tv_response_QUICK.csv" if quick else "tv_response.csv"
     results = []
+    
     print(f"\n{'='*60}")
     print(f"  Starting {num_runs} Test Runs")
     print(f"{'='*60}\n")
     
-    # Main test loop
-    # Pre-conditions
-    print("\n[PRE-CONDITION] Setting up test environment...")
-    send_key(ser, 'Exit', 2)
+    source_channel = "11-1"
+    target_channel = input("T2 Tennis Channel (default: 450): ").strip() or "450"
+
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> Home PIP Live TV")
     send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
+    for key_name in channel_to_keys('36-1'):
+        send_key(ser, key_name, 1)
     send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1 (Fox News)")
 
-
-    # AC Power cycle
-    print("\n[AC POWER CYCLE] Starting power cycle...")
+    print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
     asyncio.run(run_ac_power_cycle(ip, 60))
-    wait_with_countdown_noKeyInput(180, "Power Stabilization")
+    wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    # Launching PIP
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 10)
+    print("\n[STEP] Home -> PIP Live TV")
+    send_key(ser, 'Home', 3)
+    lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                      'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+    wait_with_countdown_noKeyInput(10, "Live TV")
 
-
-    
-
-
-    prepare_channel_landing(ser, cap, config)
+    # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
+    lgc_similarity.ensure_screen(cap, config['SoC'])
+    if not lgc_similarity.has_landing(config['SoC']):
+        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
+        send_key(ser, 'ChUp', 0)
+        wait_with_countdown_noKeyInput(10, "Back on the channel")
 
     for run_idx in range(1, num_runs + 1):
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
         print(f"{'='*60}")
-        
+        suite_progress.state.update(run_idx=run_idx, steps=[], step=0)
+        if run_idx > 1:
+            suite_progress.sound('tc_start')
+
         # Create run directory
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_path = os.path.join(
@@ -391,47 +342,30 @@ def main():
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")
-        
+
         try:
-            # Start each numeric channel measurement from the required source channel.
-            source_channel = SOURCE_CHANNEL
-            print(f"[RUN {run_idx}] Source channel: {source_channel}")
-            for key_name in channel_to_keys(source_channel):
-                send_key_human_like(ser, key_name)
-                
-            send_key(ser, 'OK', 0)
-            wait_with_countdown_noKeyInput(
-                180,
-                f"Source channel {source_channel} wait before target channel input"
-            )
+            print(f"\n[STEP] Channel {source_channel} (NBC)")
+            go_to_channel(ser, source_channel, delay=1)
+            wait_with_countdown_noKeyInput(180, f"NBC {source_channel}")
 
-            # Prepare the numeric channel-number selection to measure.
-            target_channel = TARGET_CHANNEL
-            print(f"[RUN {run_idx}] Target channel: {target_channel}")
-            _, trigger_key = prepare_channel_input(
-                ser,
-                target_channel,
-                confirm_with_ok=USE_OK_TO_SELECT_CHANNEL
-            )
+            # Measured: number keys of T2 Tennis, then OK (OK starts the timer)
+            print(f"[RUN {run_idx}] Number keys {target_channel} (T2 Tennis), OK is measured")
+            for key_name in channel_to_keys(target_channel):
+                send_key(ser, key_name, 0)
+                time.sleep(random.uniform(0.35, 0.9))
+            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK',
+                                              mode='channel')
 
- 
-            # Motion detection measurement
-            result = perform_motion_detection(
-                ser, cap, run_idx, dir_path, timeout, config, trigger_key
-            )
-            
             if result:
-                result['source_channel'] = source_channel
-                result['target_channel'] = target_channel
                 results.append(result)
-                
+
                 # Save to CSV
                 if result['detected']:
                     df = pd.DataFrame({
-                        'Run': [result['run']],
+                        'Run': [run_idx],
                         'Timestamp': [ts_run],
-                        'Source_Channel': [result['source_channel']],
-                        'Target_Channel': [result['target_channel']],
+                        'From_Ch': [source_channel],
+                        'To_Ch': [target_channel],
                         'Response_Time_ms': [round(result['response_time_ms'], 2)],
                         'Frames': [result['frame_count']],
                         'Status': ['PASS'],
@@ -439,26 +373,15 @@ def main():
                     })
                     write_header = not os.path.exists(csv_path)
                     df.to_csv(csv_path, mode='a', header=write_header, index=False)
-        
+
         except Exception as e:
             print(f"❌ Error in run {run_idx}: {e}")
-        
+
         # Wait before next run
         if run_idx < num_runs:
-            
-            wait_with_countdown_noKeyInput(10, "Interval between runs")
-            """
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'Back', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'OK', 2)
-            """
-            
-    
+            wait_with_countdown_noKeyInput(10, f"T2 Tennis {target_channel}")
 
-
-
+    suite_progress.sound('all_done')
 
     # Summary
     print(f"\n{'='*60}")

@@ -15,6 +15,7 @@ import asyncio
 from kasa import SmartPlug
 import sys
 import lgc_similarity
+import lgc_lineup
 import suite_progress
 from config_store import remembered_input
 
@@ -554,94 +555,63 @@ def run_tc03(ser, cap, config, run_idx, csv_path):
 # =====================================================================
 
 TC04_SOURCE_CHANNEL       = "11-1"
-TC04_TARGET_CHANNEL       = "443"
+TC04_TARGET_CHANNEL       = "450"
 TC04_USE_OK_TO_CONFIRM    = True
 TC04_REPEAT_COUNT         = 5
 
 
-def setup_tc04(ser, cap, config):
-    ip = config['ip']
-    print("\n[TC04 SETUP] Setting up test environment...")
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(30, "Pre-load Channel")
-
-    print("\n[AC POWER CYCLE] Starting power cycle...")
-    run_ac_power_cycle(ip, 60)
-    wait_with_countdown_noKeyInput(180, "Power Stabilization")
-
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 10)
-
-
 def run_tc04(ser, cap, config, run_idx, csv_path):
+    """LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> Home PIP Live TV, then 5x:
+    11-1 NBC (180 s) -> number keys of T2 (IP450) + OK; OK starts the timer, the new channel cutting in ends it."""
     ip      = config['ip']
     timeout = config['timeout']
     source  = TC04_SOURCE_CHANNEL
-    target  = TC04_TARGET_CHANNEL
-    target = config.get('t2_channel', target)
+    target  = config.get('t2_channel', TC04_TARGET_CHANNEL)
+    ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_dir = make_dir("C:/Temp", "LGC_Perf_TC04", run_idx, ts_run, config)
+    print(f"Output directory: {base_dir}")
 
-    ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC04", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
-
-    print("\n[PRE-CONDITION] LiveTV 36-1 (60s) -> AC Power Off -> AC Power On -> Home PIP LiveTV")
-    send_key(ser, 'LiveTV', 1.5)
-    send_key(ser, 'Num_03', 1.5)
-    send_key(ser, 'Num_06', 1.5)
-    send_key(ser, 'DASH', 1.5)
-    send_key(ser, 'Num_01', 1.5)
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> Home PIP Live TV")
+    send_key(ser, 'LiveTV', 3)
+    for key_name in channel_to_keys('36-1'):
+        send_key(ser, key_name, 1)
     send_key(ser, 'OK', 2)
-    wait_with_countdown_noKeyInput(60, "LiveTV 36-1")
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1 (Fox News)")
 
     print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
     run_ac_power_cycle(ip, 60)
     wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadDn', 2)
-    send_key(ser, 'OK', 10)
+    print("\n[STEP] Home -> PIP Live TV")
+    send_key(ser, 'Home', 3)
+    lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                      'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+    wait_with_countdown_noKeyInput(10, "Live TV")
+
+    # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
+    prepare_channel_landing(ser, cap, config)
 
     results = []
-    prepare_channel_landing(ser, cap, config)
     for cycle_idx in range(1, TC04_REPEAT_COUNT + 1):
         print(f"\n[TC04] Scenario cycle {cycle_idx}/{TC04_REPEAT_COUNT}")
+        print(f"[STEP] Channel {source} (NBC)")
+        go_to_channel(ser, source, delay=1)
+        wait_with_countdown_noKeyInput(180, f"NBC {source}")
 
-        print(f"[RUN {run_idx}] Entering source channel: {source}")
-        for key_name in channel_to_keys(source):
-            send_key_human_like(ser, key_name)
-        send_key(ser, 'OK', 0)
-        wait_with_countdown_noKeyInput(180, f"Source channel {source} stabilization")
-
-        print(f"[RUN {run_idx}] Target channel: {target}")
+        print(f"[TC04] Number keys {target} (T2 Tennis), OK is measured")
         _, trigger_key = prepare_channel_input(ser, target, confirm_with_ok=TC04_USE_OK_TO_CONFIRM)
-
-        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
+        cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
         os.makedirs(cycle_dir, exist_ok=True)
-
         result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key,
                                           mode='channel')
+        save_result(result, ts_run, csv_path, 'TC04',
+                    extra_cols={'Cycle': cycle_idx, 'From_Ch': source, 'To_Ch': target})
         if result:
             result['source_channel'] = source
             result['target_channel'] = target
             result['cycle'] = cycle_idx
             results.append(result)
-        save_result(result, ts_run, csv_path, 'TC04',
-                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': source, 'Target_Channel': target})
-
-        wait_with_countdown_noKeyInput(10, f"Cycle {cycle_idx} stabilization")
-        print(f"[RUN {run_idx}] Returning to source channel: {source}")
-        for key_name in channel_to_keys(source):
-            send_key_human_like(ser, key_name)
-        send_key(ser, 'OK', 0)
-        wait_with_countdown_noKeyInput(5, f"Source channel {source} wait for next cycle")
+        wait_with_countdown_noKeyInput(10, f"T2 Tennis {target}")
 
     return results
 
@@ -650,223 +620,114 @@ def run_tc04(ser, cap, config, run_idx, csv_path):
 # ===== TC05_NtN – Native to Native ==================================
 # =====================================================================
 
-def setup_tc05_ntn(ser, cap, config):
-    ip = config['ip']
-    native_previous = config.get('native_previous_channel', '443')
-    print("\n[TC05_NtN SETUP] Setting up test environment...")
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
-
-    run_ac_power_cycle(ip, 60)
-    wait_with_countdown_noKeyInput(180, "Power Stabilization")
-
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 15)
-
-
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-
-    send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'OK', 2)
-    wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30)
-
-    send_key(ser, 'Num_00', 1.5)  # throwaway digit: first keypress lands before the entry field is ready
-    for key_name in channel_to_keys(native_previous):
-        send_key(ser, key_name, 1.5)
-    send_key(ser, 'OK', 5)
-    send_key(ser, 'Back', 5)
-
-
 TC05_NTN_REPEAT_COUNT = 5
+TC05_APP_ROUTE = ['Right']                                          # Home -> LG Channels (default keys)
+TC05_LIVE_ROUTE = ['Left', 'Left', 'Left', 'Left', 'Down', 'Down']   # LG Channels home -> LIVE (default keys)
+
+
+def open_lg_channels_home(ser, soc):
+    """Home -> the saved route to LG Channels + OK, waiting until its home has loaded (route planning)."""
+    send_key(ser, 'Home', 3)
+    lgc_similarity.replay_route(lambda key, delay: send_key(ser, key, delay), soc, 'tc05_lgc_app', TC05_APP_ROUTE)
+    send_key(ser, 'OK', 2)
+    time.sleep(13)
+
+
+TC05_KINDS = {'TC05_NtN': ('Native', 'Native'), 'TC05_NtP': ('Native', 'Pluto'), 'TC05_PtP': ('Pluto', 'Pluto')}
+TC05_REPEAT = {'TC05_NtN': TC05_NTN_REPEAT_COUNT, 'TC05_NtP': 5, 'TC05_PtP': 5}
+TC05_PAIR_KEY = {'TC05_NtN': 'ntn_pair', 'TC05_NtP': 'ntp_pair', 'TC05_PtP': 'ptp_pair'}
+OPPOSITE_KEY = {'ChUp': 'ChDown', 'ChDown': 'ChUp'}
+
+
+def _tc05_live_precondition(ser, cap, config, first_channel):
+    """LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> LG Channels -> LIVE -> first_channel (10 s)."""
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> LG Channels -> LIVE "
+          f"-> {first_channel}")
+    send_key(ser, 'LiveTV', 3)
+    for key_name in channel_to_keys('36-1'):
+        send_key(ser, key_name, 1)
+    send_key(ser, 'OK', 2)
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1 (Fox News)")
+
+    print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
+    run_ac_power_cycle(config['ip'], 60)
+    wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
+
+    print("\n[STEP] Home -> LG Channels")
+    send_key(ser, 'Home', 3)
+    lgc_similarity.navigate_from_home(lambda k, delay: send_key(ser, k, delay), cap, config['SoC'],
+                                      'tc05_lgc_app', "LG Channels on Home", TC05_APP_ROUTE)
+    wait_with_countdown_noKeyInput(15, "LG Channels")
+
+    print("\n[STEP] LIVE")
+    lgc_similarity.navigate_from_home(lambda k, delay: send_key(ser, k, delay), cap, config['SoC'],
+                                      'tc05_lgc_live', "LIVE in LG Channels", TC05_LIVE_ROUTE,
+                                      open_start=lambda: open_lg_channels_home(ser, config['SoC']))
+    wait_with_countdown_noKeyInput(10, "LIVE")
+
+    print(f"\n[STEP] Channel {first_channel}")
+    send_key(ser, 'Num_00', 1.5)   # throwaway digit: the first key lands before the entry field is ready
+    go_to_channel(ser, first_channel, delay=1)
+    wait_with_countdown_noKeyInput(10, f"Channel {first_channel}")
+
+
+def _run_tc05(ser, cap, config, run_idx, csv_path, label):
+    """One TC05 case with the pair chosen from the lineup: From --key--> To is measured 5 times.
+    NtN (like TC03): on To, the opposite key (unmeasured) goes to From, 10 s, the key back to To is measured.
+    NtP / PtP: From by number (10 s), the key into To is measured."""
+    timeout = config['timeout']
+    pair = config[TC05_PAIR_KEY[label]]
+    src, key, dst = pair['from'], pair['key'], pair['to']
+    from_kind, to_kind = TC05_KINDS[label]
+    lgc_lineup.show(label, pair, from_kind, to_kind)          # the channels used, checked on the lineup
+    ts_run  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_dir = make_dir("C:/Temp", f"LGC_Perf_{label}", run_idx, ts_run, config)
+    print(f"Output directory: {base_dir}")
+
+    by_reverse = label == 'TC05_NtN'
+    _tc05_live_precondition(ser, cap, config, dst if by_reverse else src)
+    # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
+    prepare_channel_landing(ser, cap, config)
+
+    results = []
+    for cycle_idx in range(1, TC05_REPEAT[label] + 1):
+        print(f"\n[{label}] Scenario cycle {cycle_idx}/{TC05_REPEAT[label]}")
+        if by_reverse:
+            send_key(ser, OPPOSITE_KEY[key], 0)
+        else:
+            go_to_channel(ser, src, delay=1)
+        wait_with_countdown_noKeyInput(10, f"{from_kind} {src}")
+
+        print(f"[{label}] Measuring {key}: {from_kind} {src} -> {to_kind} {dst}")
+        cycle_dir = os.path.join(base_dir, f"cycle_{cycle_idx:02d}")
+        os.makedirs(cycle_dir, exist_ok=True)
+        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key=key)
+        save_result(result, ts_run, csv_path, label,
+                    extra_cols={'Cycle': cycle_idx, 'From_Ch': src, 'To_Ch': dst, 'Key': key})
+        if result:
+            result['cycle'] = cycle_idx
+            result['source_channel'] = src
+            result['target_channel'] = dst
+            results.append(result)
+        if by_reverse:
+            wait_with_countdown_noKeyInput(5, f"{to_kind} {dst}")
+
+    return results
 
 
 def run_tc05_ntn(ser, cap, config, run_idx, csv_path):
-    timeout         = config['timeout']
-    native_previous = config.get('native_previous_channel', '0443')
-
-    ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC05_NtN", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
-
-    results = []
-    prepare_channel_landing(ser, cap, config)
-    for cycle_idx in range(1, TC05_NTN_REPEAT_COUNT + 1):
-        print(f"\n[TC05_NtN] Scenario cycle {cycle_idx}/{TC05_NTN_REPEAT_COUNT}")
-
-        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
-        os.makedirs(cycle_dir, exist_ok=True)
-
-        send_key(ser, 'ChDown', 10)
-        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp')
-        if result:
-            result['source_channel'] = native_previous
-            result['target_channel'] = 'Native+1'
-            result['cycle'] = cycle_idx
-            results.append(result)
-        save_result(result, ts_run, csv_path, 'TC05_NtN',
-                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': native_previous, 'Target_Channel': 'Native+1'})
-
-    return results
-
-
-# =====================================================================
-# ===== TC05_NtP – Native to Pluto ===================================
-# =====================================================================
-
-def setup_tc05_ntp(ser, cap, config):
-    ip = config['ip']
-    pluto_ch = config.get('pluto_channel_ntp', '151')
-    print("\n[TC05_NtP SETUP] Setting up test environment...")
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
-
-    run_ac_power_cycle(ip, 60)
-    wait_with_countdown_noKeyInput(180, "Power Stabilization")
-
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 15)
-
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-
-    send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'OK', 2)
-    wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30)
-
-    send_key(ser, 'Num_00', 1.5)  # throwaway digit: first keypress lands before the entry field is ready
-    for key_name in channel_to_keys(pluto_ch):
-        send_key(ser, key_name, 1.5)
-    send_key(ser, 'OK', 5)
-    send_key(ser, 'Back', 5)
-
-
-TC05_NTP_REPEAT_COUNT = 5
+    """Native -> Native (e.g. PGA TOUR 442 --ChUp--> T2 443), channels from the lineup."""
+    return _run_tc05(ser, cap, config, run_idx, csv_path, 'TC05_NtN')
 
 
 def run_tc05_ntp(ser, cap, config, run_idx, csv_path):
-    timeout  = config['timeout']
-    pluto_ch = config.get('pluto_channel_ntp', '151')
-
-    ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC05_NtP", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
-
-    results = []
-    prepare_channel_landing(ser, cap, config)
-    for cycle_idx in range(1, TC05_NTP_REPEAT_COUNT + 1):
-        print(f"\n[TC05_NtP] Scenario cycle {cycle_idx}/{TC05_NTP_REPEAT_COUNT}")
-
-        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
-        os.makedirs(cycle_dir, exist_ok=True)
-
-        send_key(ser, 'ChDown', 10)
-        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp')
-        if result:
-            result['source_channel'] = 'Native'
-            result['target_channel'] = pluto_ch
-            result['cycle'] = cycle_idx
-            results.append(result)
-        save_result(result, ts_run, csv_path, 'TC05_NtP',
-                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': 'Native', 'Target_Channel': pluto_ch})
-
-    return results
-
-
-# =====================================================================
-# ===== TC05_PtP – Pluto to Pluto ====================================
-# =====================================================================
-
-def setup_tc05_ptp(ser, cap, config):
-    ip = config['ip']
-    pluto_ch = config.get('pluto_channel_ptp', '220')
-    print("\n[TC05_PtP SETUP] Setting up test environment...")
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(60, "Pre-load Channel")
-
-    run_ac_power_cycle(ip, 60)
-    wait_with_countdown_noKeyInput(180, "Power Stabilization")
-
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 15)
-
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-    send_key(ser, 'DpadLt', 3)
-
-    send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'DpadDn', 3)
-    send_key(ser, 'OK', 2)
-    wait_for_app_ready(cap, motion_timeout=15, stable_timeout=30)
-
-    send_key(ser, 'Num_00', 1.5)  # throwaway digit: first keypress lands before the entry field is ready
-    for key_name in channel_to_keys(pluto_ch):
-        send_key(ser, key_name, 1.5)
-    send_key(ser, 'OK', 5)
-    send_key(ser, 'Back', 5)
-
-
-TC05_PTP_REPEAT_COUNT = 5
+    """Native -> Pluto with one ChUp / ChDown, channels from the lineup."""
+    return _run_tc05(ser, cap, config, run_idx, csv_path, 'TC05_NtP')
 
 
 def run_tc05_ptp(ser, cap, config, run_idx, csv_path):
-    timeout  = config['timeout']
-    pluto_ch = config.get('pluto_channel_ptp', '220')
-
-    ts_run   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dir_path = make_dir("C:/Temp", "LGC_Perf_TC05_PtP", run_idx, ts_run, config)
-    print(f"Output directory: {dir_path}")
-
-    results = []
-    prepare_channel_landing(ser, cap, config)
-    for cycle_idx in range(1, TC05_PTP_REPEAT_COUNT + 1):
-        print(f"\n[TC05_PtP] Scenario cycle {cycle_idx}/{TC05_PTP_REPEAT_COUNT}")
-
-        cycle_dir = os.path.join(dir_path, f"cycle_{cycle_idx:02d}")
-        os.makedirs(cycle_dir, exist_ok=True)
-
-        send_key(ser, 'ChDown', 10)
-        result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='ChUp')
-        if result:
-            result['source_channel'] = pluto_ch
-            result['target_channel'] = 'Pluto+1'
-            result['cycle'] = cycle_idx
-            results.append(result)
-        save_result(result, ts_run, csv_path, 'TC05_PtP',
-                    extra_cols={'Cycle': cycle_idx, 'Source_Channel': pluto_ch, 'Target_Channel': 'Pluto+1'})
-
-    return results
+    """Pluto -> Pluto with one ChUp / ChDown, channels from the lineup."""
+    return _run_tc05(ser, cap, config, run_idx, csv_path, 'TC05_PtP')
 
 
 # =====================================================================
@@ -1280,20 +1141,15 @@ def get_user_configuration(selected_tcs):
         config['t2_channel'] = validate_channel_value(t2_channel, "450")
         config['pga_channel'] = validate_channel_value(pga_channel, "449")
 
-    if 'TC05_NtN' in selected_tcs:
-        config['native_previous_channel'] = (
-            input("TC05_NtN – Native Previous Channel (default: 443): ").strip() or "443"
-        )
 
+    # TC05: the channels come from the LG Channels lineup (channel server); the check is shown and confirmed
+    if 'TC05_NtN' in selected_tcs:
+        config['ntn_pair'] = lgc_lineup.choose_pair(input, 'TC05_NtN', 'Native', 'Native', prefer=('T2', 'PGA'))
     if 'TC05_NtP' in selected_tcs:
-        config['pluto_channel_ntp'] = (
-            input("TC05_NtP – Pluto Channel (default: 151): ").strip() or "151"
-        )
+        config['ntp_pair'] = lgc_lineup.choose_pair(input, 'TC05_NtP', 'Native', 'Pluto')
 
     if 'TC05_PtP' in selected_tcs:
-        config['pluto_channel_ptp'] = (
-            input("TC05_PtP – Pluto Channel (default: 220): ").strip() or "220"
-        )
+        config['ptp_pair'] = lgc_lineup.choose_pair(input, 'TC05_PtP', 'Pluto', 'Pluto')
 
     print("\n" + "="*60)
     print("  Configuration Summary")
@@ -1315,10 +1171,6 @@ def get_user_configuration(selected_tcs):
 # =====================================================================
 
 TC_SETUP_MAP = {
-    'TC04':      setup_tc04,
-    'TC05_NtN':  setup_tc05_ntn,
-    'TC05_NtP':  setup_tc05_ntp,
-    'TC05_PtP':  setup_tc05_ptp,
 }
 
 TC_RUN_MAP = {
@@ -1422,10 +1274,18 @@ def main():
         # TC01 / TC02 end = similarity with the LG Channels home (reference and TV screen area saved per SoC)
         lgc_similarity.prepare(cap, config['SoC'], lambda: open_lg_channels(ser))
 
-    if 'TC03' in selected_tcs:
-        # TC03 enters Live TV from Home ~4 min into the run (after the AC cycle): ask the route now
+    if 'TC03' in selected_tcs or 'TC04' in selected_tcs:
+        # TC03 / TC04 enter Live TV from Home ~4 min into the run (after the AC cycle): ask the route now
         lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
                                         'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+    if any(label in selected_tcs for label in ('TC05_NtN', 'TC05_NtP', 'TC05_PtP')):
+        # TC05_NtN / NtP open LG Channels, then LIVE, ~4 min into the run: check both routes now
+        lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                            'tc05_lgc_app', "LG Channels on Home", TC05_APP_ROUTE)
+        lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                            'tc05_lgc_live', "LIVE in LG Channels", TC05_LIVE_ROUTE,
+                                            open_start=lambda: open_lg_channels_home(ser, config['SoC']),
+                                            start_name='LG Channels')
 
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}{'_QUICK' if quick else ''}.csv"

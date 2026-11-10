@@ -14,6 +14,8 @@ from kasa import SmartPlug
 import sys
 from config_store import remembered_input
 import lgc_similarity
+import lgc_lineup
+import suite_progress
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC5_NtP_inputs.json).
 input = remembered_input("LGC_TC5_NtP_inputs.json")
@@ -24,7 +26,7 @@ def get_user_configuration():
     Interactive configuration input from user
     """
     print("\n" + "="*60)
-    print("  LG TV Cold Boot Performance Test - Configuration")
+    print("  LG TV Native to Pluto Channel Change Test - Configuration")
     print("="*60 + "\n")
     
     # Device IP
@@ -51,19 +53,10 @@ def get_user_configuration():
     SoC = input("Enter SoC Model (default: O22N3): ").strip() or "O22N3"
     
     # Software Version
-    SWV = input("Enter Software Version (default: 33.31.22): ").strip() or "33.31.22"
+    SWV = input("Enter Software Version (default: 33.31.22): ").strip() or "33_30_97"
     
     # LG CV
-    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4.0.18-1"
-
-    # Pluto target channel number
-    while True:
-        pluto_channel = input("Enter Pluto (After Native) Channel Number (default: 151): ").strip() or "151"
-        if any(char.isdigit() for char in pluto_channel) and all(
-            char.isdigit() or char == '-' for char in pluto_channel
-        ):
-            break
-        print("Invalid channel format. Use digits and '-' only.")
+    LGCV = input("Enter LG CV Version (default: 4.0.18-1): ").strip() or "4_0_7-2"
     
     # Number of runs
     while True:
@@ -78,7 +71,7 @@ def get_user_configuration():
     # Timeout
     while True:
         try:
-            timeout = float(input("Enter timeout for motion detection in seconds (default: 10): ").strip() or "10")
+            timeout = float(input("Enter timeout for motion detection in seconds (default: 20): ").strip() or "20")
             if timeout > 0:
                 break
             print("❌ Please enter a positive number.")
@@ -91,7 +84,6 @@ def get_user_configuration():
         'SoC': SoC,
         'SWV': SWV,
         'LGCV': LGCV,
-        'pluto_channel': pluto_channel,
         'num_runs': num_runs,
         'timeout': timeout
     }
@@ -162,22 +154,6 @@ IR_KEYS = {
     'BLU': b'mc 00 61\n',
 }
 
-USE_OK_TO_SELECT_CHANNEL = True
-
-CHANNEL_KEY_MAP = {
-    '0': 'Num_00',
-    '1': 'Num_01',
-    '2': 'Num_02',
-    '3': 'Num_03',
-    '4': 'Num_04',
-    '5': 'Num_05',
-    '6': 'Num_06',
-    '7': 'Num_07',
-    '8': 'Num_08',
-    '9': 'Num_09',
-    '-': 'DASH',
-}
-
 # ===== Measurement Thresholds =====
 GRAY_THRESHOLD = 150
 MOTION_THRESHOLD = 150
@@ -187,42 +163,14 @@ STABLE_FRAMES = 5
 def send_key(ser, key_name, delay=2):
     """Send IR key command"""
     if key_name in IR_KEYS:
+        suite_progress.before_key(key_name)
         ser.write(IR_KEYS[key_name])
         ser.flush()
         time.sleep(delay)
+        # after Num keys + OK: check on the camera that the channel really changed (quick check: confirm)
+        suite_progress.after_key(key_name, lambda key, wait: send_key(ser, key, wait))
     else:
         print(f"⚠ Unknown key: {key_name}")
-
-
-def channel_to_keys(channel):
-    """
-    Convert a channel string like '450' or '11-1' to IR key names.
-    """
-    keys = []
-    for char in str(channel):
-        if char not in CHANNEL_KEY_MAP:
-            raise ValueError(f"Unsupported channel character: {char}")
-        keys.append(CHANNEL_KEY_MAP[char])
-    return keys
-
-
-def prepare_channel_input(ser, channel, confirm_with_ok=True):
-    """
-    Enter the channel like a user would. If confirm_with_ok is True, OK is the
-    measurement trigger. Otherwise the final channel digit is the trigger.
-    """
-    keys = channel_to_keys(channel)
-    if confirm_with_ok:
-        for key_name in keys:
-            send_key(ser, key_name, 2)
-        return keys, 'OK'
-
-    if len(keys) <= 1:
-        return [], keys[0]
-
-    for key_name in keys[:-1]:
-        send_key(ser, key_name, 2)
-    return keys[:-1], keys[-1]
 
 
 def send_shell_command_with_debug(ser, command):
@@ -256,19 +204,9 @@ def send_shell_command_with_debug(ser, command):
 
 
 def wait_with_countdown_noKeyInput(seconds, description="Timer"):
-    """
-    Countdown timer without key input requirement
-    """
-    winsound.Beep(1000, 200)
-    print(f"\n[TIMER] {description}: {seconds} seconds")
-    
-    for remaining in range(seconds, 0, -1):
-        print(f"  ⏱ {remaining} seconds remaining...", end="\r")
-        time.sleep(1)
-    
-    print(" " * 50, end="\r")
-    winsound.Beep(1500, 300)
-    print(f"[TIMER] ✓ {description} Complete!\n")
+    """Timed wait: camera view with run / step / time left, sounds at start, last 3 s and end
+    (shortened in the quick flow check)."""
+    suite_progress.countdown(seconds, description)
 
 
 async def run_ac_power_cycle(ip, off_seconds):
@@ -279,11 +217,13 @@ async def run_ac_power_cycle(ip, off_seconds):
         dev = SmartPlug(ip)
         await dev.update()
         await dev.turn_off()
+        suite_progress.sound('ac_off')
         print(f"✓ Device powered OFF")
         
-        await asyncio.sleep(off_seconds)
+        suite_progress.countdown(off_seconds, "AC power OFF", as_step=False)
         
         await dev.turn_on()
+        suite_progress.sound('ac_on')
         print(f"✓ Device powered ON")
     except Exception as e:
         print(f"❌ Power cycle failed: {e}")
@@ -309,14 +249,32 @@ def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigg
 
 # ===== Main Execution =====
 
-def prepare_channel_landing(ser, cap, config):
-    """Once per SoC: the TV screen box and the landing area, with an unmeasured ChDown and ChUp back, so the
-    channel the test runs on is the same afterwards. Does nothing when both are saved."""
-    lgc_similarity.ensure_screen(cap, config['SoC'])
-    if not lgc_similarity.has_landing(config['SoC']):
-        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
-        send_key(ser, 'ChUp', 0)
-        wait_with_countdown_noKeyInput(10, "Back on the test channel")
+CHANNEL_KEY_MAP = {str(d): f'Num_0{d}' for d in range(10)}
+CHANNEL_KEY_MAP['-'] = 'DASH'
+
+
+def channel_to_keys(channel):
+    return [CHANNEL_KEY_MAP[char] for char in str(channel)]
+
+
+def go_to_channel(ser, channel, delay=1):
+    print(f"  > Navigating to channel {channel}")
+    for key_name in channel_to_keys(channel):
+        send_key(ser, key_name, delay)
+    send_key(ser, 'OK', 0)
+
+
+LABEL, FROM_KIND, TO_KIND = 'TC05_NtP', 'Native', 'Pluto'   # one ChUp / ChDown apart, from the lineup
+APP_ROUTE = ['Right']                                          # Home -> LG Channels (default keys)
+LIVE_ROUTE = ['Left', 'Left', 'Left', 'Left', 'Down', 'Down']   # LG Channels home -> LIVE (default keys)
+
+
+def open_lg_channels_home(ser, soc):
+    """Home -> the saved route to LG Channels + OK, waiting until its home has loaded (route planning)."""
+    send_key(ser, 'Home', 3)
+    lgc_similarity.replay_route(lambda key, delay: send_key(ser, key, delay), soc, 'tc05_lgc_app', APP_ROUTE)
+    send_key(ser, 'OK', 2)
+    time.sleep(13)
 
 
 def main():
@@ -331,7 +289,6 @@ def main():
     SoC = config['SoC']
     SWV = config['SWV']
     LGCV = config['LGCV']
-    pluto_channel = config['pluto_channel']
     num_runs = config['num_runs']
     timeout = config['timeout']
     
@@ -340,84 +297,103 @@ def main():
     
     # Initialize camera
     cap = initialize_camera()
+    suite_progress.state['camera'] = cap
+    suite_progress.begin_tc(1, 1, LABEL, num_runs, cap)
+
+    # LG Channels, then LIVE, are opened ~4 min into the run (after the AC cycle): check both routes now
+    lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, SoC,
+                                        'tc05_lgc_app', "LG Channels on Home", APP_ROUTE)
+    lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, SoC,
+                                        'tc05_lgc_live', "LIVE in LG Channels", LIVE_ROUTE,
+                                        open_start=lambda: open_lg_channels_home(ser, SoC), start_name='LG Channels')
     
     # CSV path
-    csv_path = "tv_response.csv"
+    quick = suite_progress.ask_quick()
+    csv_path = "tv_response_QUICK.csv" if quick else "tv_response.csv"
     results = []
+    
     print(f"\n{'='*60}")
     print(f"  Starting {num_runs} Test Runs")
     print(f"{'='*60}\n")
     
-    # Main test loop
-    # Pre-conditions
-    print("\n[PRE-CONDITION] Setting up test environment...")
-    send_key(ser, 'Exit', 2)
+    # Native -> Pluto with one ChUp / ChDown, from the LG Channels lineup on the channel server
+    pair = lgc_lineup.choose_pair(input, LABEL, FROM_KIND, TO_KIND)
+    src, dst, measure_key = pair['from'], pair['to'], pair['key']
+
+    # the channels used, checked on the lineup, shown again right before the run
+    lgc_lineup.show(LABEL, pair, FROM_KIND, TO_KIND)
+
+    print("\n[PRE-CONDITION] LiveTV 36-1 (60 s) -> AC off (60 s) -> AC on (180 s) -> LG Channels -> LIVE -> From channel")
     send_key(ser, 'LiveTV', 3)
-    send_key(ser, 'Num_03', 1)
-    send_key(ser, 'Num_06', 1)
-    send_key(ser, 'DASH', 1)
-    send_key(ser, 'Num_01', 1)
-    send_key(ser, 'OK', 5)
-    wait_with_countdown_noKeyInput(10, "Pre-load Channel")
+    for key_name in channel_to_keys('36-1'):
+        send_key(ser, key_name, 1)
+    send_key(ser, 'OK', 2)
+    wait_with_countdown_noKeyInput(60, "LiveTV 36-1 (Fox News)")
 
-    """
-    # AC Power cycle
-    print("\n[AC POWER CYCLE] Starting power cycle...")
+    print("\n[AC POWER CYCLE] Power OFF for 60 seconds...")
     asyncio.run(run_ac_power_cycle(ip, 60))
-    wait_with_countdown_noKeyInput(18, "Power Stabilization")
-    """
+    wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    # Launching PIP
-    send_key(ser, 'Exit', 2)
-    send_key(ser, 'Home', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 10)
+    print("\n[STEP] Home -> LG Channels")
+    send_key(ser, 'Home', 3)
+    lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                      'tc05_lgc_app', "LG Channels on Home", APP_ROUTE)
+    wait_with_countdown_noKeyInput(15, "LG Channels")
 
-    for key_name in channel_to_keys(pluto_channel):
-        send_key(ser, key_name, 2)
-    send_key(ser, 'OK', 5)
+    print("\n[STEP] LIVE")
+    lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                                      'tc05_lgc_live', "LIVE in LG Channels", LIVE_ROUTE,
+                                      open_start=lambda: open_lg_channels_home(ser, config['SoC']))
+    wait_with_countdown_noKeyInput(10, "LIVE")
 
-    send_key(ser, 'Back', 5)
-    
+    print(f"\n[STEP] {FROM_KIND} channel {src}")
+    send_key(ser, 'Num_00', 1.5)   # throwaway digit: the first key lands before the entry field is ready
+    go_to_channel(ser, src, delay=1)
+    wait_with_countdown_noKeyInput(10, f"{FROM_KIND} {src}")
 
-
-    prepare_channel_landing(ser, cap, config)
+    # One-time per SoC: TV screen box and how the channel changes (one unmeasured ChDown, then ChUp back).
+    lgc_similarity.ensure_screen(cap, config['SoC'])
+    if not lgc_similarity.has_landing(config['SoC']):
+        lgc_similarity.ensure_landing(cap, config['SoC'], lambda: send_key(ser, 'ChDown', 0))
+        send_key(ser, 'ChUp', 0)
+        wait_with_countdown_noKeyInput(10, f"Back on {src}")
 
     for run_idx in range(1, num_runs + 1):
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
         print(f"{'='*60}")
+        suite_progress.state.update(run_idx=run_idx, steps=[], step=0)
+        if run_idx > 1:
+            suite_progress.sound('tc_start')
         
         # Create run directory
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
         dir_path = os.path.join(
             "C:/Temp",
-            f"LGC_Perf_TC05_NtP_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
+            f"LGC_Perf_{LABEL}_{run_idx:02d}_{ts_run}_{SoC}_SWV{SWV}_LGCV{LGCV}"
         )
         os.makedirs(dir_path, exist_ok=True)
         print(f"Output directory: {dir_path}")
         
         try:
-            send_key(ser, 'ChDown', 10)
+            go_to_channel(ser, src, delay=1)
+            wait_with_countdown_noKeyInput(10, f"{FROM_KIND} {src}")
 
-
-            # Motion detection measurement
-            result = perform_motion_detection(
-                ser, cap, run_idx, dir_path, timeout, config, trigger_key='ChUp'
-            )
+            # Measured: ChUp / ChDown from the From channel into the To channel
+            print(f"[RUN {run_idx}] Measuring {measure_key}: {FROM_KIND} {src} -> {TO_KIND} {dst}")
+            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key=measure_key)
             
             if result:
-                result['source_channel'] = 'Native'
-                result['target_channel'] = pluto_channel
                 results.append(result)
                 
                 # Save to CSV
                 if result['detected']:
                     df = pd.DataFrame({
-                        'Run': [result['run']],
+                        'Run': [run_idx],
                         'Timestamp': [ts_run],
-                        'Source_Channel': [result['source_channel']],
-                        'Target_Channel': [result['target_channel']],
+                        'From_Ch': [src],
+                        'To_Ch': [dst],
+                        'Key': [measure_key],
                         'Response_Time_ms': [round(result['response_time_ms'], 2)],
                         'Frames': [result['frame_count']],
                         'Status': ['PASS'],
@@ -432,19 +408,9 @@ def main():
         # Wait before next run
         if run_idx < num_runs:
             
-            wait_with_countdown_noKeyInput(10, "Interval between runs")
-            """
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'Back', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'OK', 2)
-            """
-            
-    
+            wait_with_countdown_noKeyInput(5, f"{TO_KIND} {dst}")
 
-
-
+    suite_progress.sound('all_done')
 
     # Summary
     print(f"\n{'='*60}")

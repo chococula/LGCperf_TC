@@ -16,6 +16,7 @@ import threading
 import time
 
 import cv2
+import hangul_keys  # noqa: F401  keys typed in Korean mode count as the Latin key (y for ㅛ)
 import numpy as np
 import pandas as pd
 import winsound
@@ -374,96 +375,515 @@ def _offer_reference(frame, soc, target):
 
 
 def ensure_landing(cap, soc, change_once):
-    """The area that is empty (black) while a new channel loads, set once per SoC by one unmeasured change."""
+    """Once per SoC, with one unmeasured channel change: does the screen go black (then the landing area is
+    chosen on the darkest frame) or does the old picture freeze and the new one cut in (no area needed)?"""
+    import Omedia_TC02 as channel
     settings = _settings()
     model = settings['models'].setdefault(soc, {})
-    if model.get('landing'):
-        return model['landing']
-    print("\n[CHANNEL] One unmeasured channel change to choose the landing area.")
+    transition = model.get('transition')
+    if transition == 'freeze' or (transition == 'black' and model.get('landing')):
+        return model.get('landing')
+    screen = ensure_screen(cap, soc)
+    settings = _settings()
+    model = settings['models'].setdefault(soc, {})
+    print("\n[CHANNEL] One unmeasured channel change to see how this TV changes channels...")
     change_once()
-    print("[CHANNEL] Press ENTER in the camera window while the screen is black / loading.")
-    attention()
-    while True:
+    start_at, first_levels = time.perf_counter(), []
+    darkest, darkest_level, black = None, float('inf'), False
+    while time.perf_counter() - start_at < 6.0:
         frame = _read(cap)
-        cv2.imshow(WINDOW, _overlay(frame, [("ENTER while the screen is black / loading", (0, 255, 255), 0.8)]))
-        if cv2.waitKey(1) & 0xFF in (10, 13):
-            break
-    model['landing'] = _select(cap, "Select the landing area, then ENTER",
-                               "Drag over an area that is EMPTY (black) now and filled when the picture lands.",
-                               frame=frame)
-    save_configuration(SETTINGS_FILE, settings)
-    print("[CHANNEL] Waiting 8 s for the channel to play...")
-    end = time.perf_counter() + 8
-    while time.perf_counter() < end:
-        cv2.imshow(WINDOW, _overlay(_read(cap), [("Waiting for the channel to play", (255, 255, 255), 0.8)]))
+        level = channel.screen_brightness(frame, screen)
+        if time.perf_counter() - start_at < 0.25:
+            first_levels.append(level)
+        before = max(first_levels) if first_levels else level
+        if level < darkest_level:
+            darkest, darkest_level = frame, level
+        if (level < channel.BLACK_SCREEN and level < before * channel.BLACK_RATIO
+                and level < before - channel.BLACK_DROP):
+            black = True
+        cv2.imshow(WINDOW, _overlay(frame, [(f"Channel change: {'BLACK screen seen' if black else 'watching'}",
+                                             (0, 255, 255), 0.8)]))
         cv2.waitKey(1)
-    return model['landing']
+    model['transition'] = 'black' if black else 'freeze'
+    if not black:
+        print(f"[CHANNEL] No black screen on {soc}: the landing is the cut after the old picture freezes.")
+    elif not model.get('landing'):
+        model['landing'] = _select(cap, "Select the landing area, then ENTER",
+                                   "Drag over an area that was EMPTY (black) here and is filled when the picture lands.",
+                                   frame=darkest)
+    else:
+        print(f"[CHANNEL] Black screen on {soc}: using the saved landing area.")
+    save_configuration(SETTINGS_FILE, settings)
+    return model.get('landing')
 
 
 def has_landing(soc):
-    return bool((_settings()['models'].get(soc) or {}).get('landing'))
+    """True when the channel-change type (and for a black screen, the landing area) is saved for the SoC."""
+    model = _settings()['models'].get(soc) or {}
+    return model.get('transition') == 'freeze' or (model.get('transition') == 'black' and bool(model.get('landing')))
 
 
 ROUTE_KEYS = {'Up': 'DpadUp', 'Down': 'DpadDn', 'Left': 'DpadLt', 'Right': 'DpadRt'}
 
 
-def plan_route_from_home(send, cap, soc, name, what, fallback):
-    """At the start of a TC: the route from Home to `what` for this SoC, asked before the long run begins.
+NAV_WINDOW = "LGC navigator"
+MOVE_DIFF = 6.0                 # a tile whose focus comes or goes changes at least this much (gray, mean)
+MOVE_KEY_GAP = 0.8              # seconds between the arrow keys of a route
 
-    A saved route can be kept (Enter). Otherwise Home is opened and the user clicks the highlighted item and
-    the target (Omedia_TC02.select_plan; S keeps `fallback`). Only the route is saved - nothing is opened;
-    Exit closes Home again. navigate_from_home() later replays the saved route + OK.
-    """
+
+def _close(window):
+    try:
+        cv2.destroyWindow(window)
+    except cv2.error:
+        pass                      # never opened
+
+
+def _clicks_of(chosen):
+    """[highlighted item, target] from select_plan, or None (a typed route without the click)."""
+    return [chosen[1], chosen[2]] if chosen[1] is not None and chosen[2] is not None else None
+
+
+def _route_points(soc, name):
+    """(route, clicks) saved for a route: clicks = [highlighted item, target] on the camera view, or None."""
+    model = _settings()['models'].get(soc) or {}
+    clicks = (model.get('route_clicks') or {}).get(name)
+    return (model.get('routes') or {}).get(name), ([tuple(c) for c in clicks] if clicks else None)
+
+
+def _save_route(soc, name, route, clicks):
     settings = _settings()
-    routes = settings['models'].setdefault(soc, {}).setdefault('routes', {})
-    saved = routes.get(name)
-    if saved is not None:
-        attention()
-        keep = input(f"[NAV] Home -> {what} for {soc}: {', '.join(saved) or 'no move'} + OK. "
-                     "Keep it? (Y/n): ").strip().lower()
-        if keep in ('', 'y', 'yes'):
-            return saved
-    import Omedia_TC02 as planner
-    send('Home', 3)
-    attention()
-    print(f"\n[NAV] Click the highlighted item on Home, then {what}; arrow keys adjust, ENTER saves "
-          "(S = default keys).")
-    chosen = planner.select_plan(cap, 1, what, None)
-    route = list(fallback) if chosen is None else list(chosen[0])
-    routes[name] = route
+    model = settings['models'].setdefault(soc, {})
+    model.setdefault('routes', {})[name] = list(route)
+    if clicks:
+        model.setdefault('route_clicks', {})[name] = [[int(v) for v in c] for c in clicks]
     save_configuration(SETTINGS_FILE, settings)
-    print(f"[NAV] Saved for {soc}: Home -> {', '.join(route) or 'no move'} + OK")
+
+
+def _route_counts(route):
+    rows = route.count('Down') - route.count('Up')
+    cols = route.count('Right') - route.count('Left')
+    return rows, cols
+
+
+def _navigator_image(frame, route, clicks, lines):
+    """The camera view with the planned path drawn (like the Omedia navigator)."""
+    import Omedia_TC02 as planner
+    image = frame.copy()
+    if clicks:
+        tile = planner.tile_box_at(frame, clicks[0])
+        _, _, steps = planner.plan_moves(frame, clicks[0], clicks[1], tile)
+        rows, cols = _route_counts(route)
+        planner.draw_plan(image, clicks[0], rows, cols, steps)
+    return _overlay(image, lines)
+
+
+NAV_CHECK_SECONDS = 10         # during the run the navigator waits this long for the user, then goes
+
+
+def _show_navigator(cap, route, clicks, what, seconds=NAV_CHECK_SECONDS):
+    """Show the planned path for the user to check; returns 'go' (ENTER or time up), 'manual' (M) or
+    'replan' (R)."""
+    attention()
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        left = max(0.0, end - time.perf_counter())
+        frame = _read(cap)
+        cv2.imshow(NAV_WINDOW, _navigator_image(frame, route, clicks, [
+            (f"To {what}: {', '.join(route) or 'no move'} + OK", (0, 255, 255), 0.7),
+            (f"Going in {left:.0f} s   ENTER = go now", (255, 255, 255), 0.7),
+            ("M = manual (L R U D)   R = click again", (255, 255, 255), 0.7)]))
+        code = cv2.waitKey(30) & 0xFF
+        if code in (10, 13):
+            return 'go'
+        if code in (ord('m'), ord('M')):
+            return 'manual'
+        if code in (ord('r'), ord('R')):
+            return 'replan'
+    return 'go'
+
+
+def replay_route(send, soc, name, fallback, delay=1):
+    """Send the saved route keys (no check, no OK): opens the way to a later route's start screen."""
+    route = (_settings()['models'].get(soc) or {}).get('routes', {}).get(name) or list(fallback)
+    for key in route:
+        send(ROUTE_KEYS[key], delay)
+    return route
+
+
+def _tile_change(before, after, box):
+    """Change of a tile and its edge (the focus is often a border or a zoom around the tile)."""
+    x, y, w, h = box
+    mx, my = max(6, w // 5), max(6, h // 5)
+    x, y, w, h = x - mx, y - my, w + 2 * mx, h + 2 * my
+    hh, ww = before.shape[:2]
+    x0, y0, x1, y1 = max(0, x), max(0, y), min(ww, x + w), min(hh, y + h)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return 0.0
+    a = cv2.cvtColor(before[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b = cv2.cvtColor(after[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY).astype(np.float32)
+    return float(np.mean(np.abs(a - b)))
+
+
+def _move_and_check(send, cap, route, clicks, what):
+    """Send the route keys while the camera is shown, then check the focus left the highlighted item and
+    reached the target (both tiles changed). Returns (ok, start_change, target_change); ok is None when
+    there is nothing to compare (no saved clicks or no move)."""
+    import Omedia_TC02 as planner
+    before = _read(cap)
+    boxes = [planner.tile_box_at(before, c) for c in clicks] if clicks else None
+    for index, key in enumerate(route, 1):
+        send(ROUTE_KEYS[key], 0)
+        end = time.perf_counter() + MOVE_KEY_GAP
+        while time.perf_counter() < end:
+            cv2.imshow(NAV_WINDOW, _overlay(_read(cap), [(f"{what}: {key} ({index}/{len(route)})",
+                                                          (0, 255, 255), 0.7)]))
+            cv2.waitKey(1)
+    end = time.perf_counter() + 1.0
+    while time.perf_counter() < end:
+        after = _read(cap)
+        cv2.waitKey(1)
+    if not boxes or not route:
+        return None, 0.0, 0.0
+    start_change, target_change = (_tile_change(before, after, box) for box in boxes)
+    ok = start_change >= MOVE_DIFF and target_change >= MOVE_DIFF
+    image = after.copy()
+    for (x, y, w, h), changed in zip(boxes, (start_change, target_change)):
+        color = (0, 255, 0) if changed >= MOVE_DIFF else (0, 0, 255)
+        cv2.rectangle(image, (x, y), (x + w, y + h), color, 3)
+    cv2.imshow(NAV_WINDOW, _overlay(image, [
+        (f"Focus on {what}: {'OK' if ok else 'NOT SEEN'}", (0, 255, 0) if ok else (0, 0, 255), 0.8),
+        (f"change: highlighted {start_change:.0f}, target {target_change:.0f} (>= {MOVE_DIFF:.0f})",
+         (255, 255, 255), 0.6)]))
+    cv2.waitKey(1500)
+    print(f"[NAV] Move check {what}: {'OK' if ok else 'focus NOT seen on the target'} "
+          f"(highlighted {start_change:.1f}, target {target_change:.1f})")
+    return ok, start_change, target_change
+
+
+def _ask_on_screen(cap, lines, keys):
+    """Show the camera with lines until one of `keys` (chars, ENTER = '\r') is pressed; returns it."""
+    attention()
+    while True:
+        cv2.imshow(NAV_WINDOW, _overlay(_read(cap), lines))
+        code = cv2.waitKey(30) & 0xFF
+        char = '\r' if code in (10, 13) else chr(code).lower() if code < 128 else ''
+        if char in keys:
+            return char
+
+
+TEACH_KEYS = {'l': 'Left', 'r': 'Right', 'u': 'Up', 'd': 'Down'}
+OPPOSITE = {'Left': 'Right', 'Right': 'Left', 'Up': 'Down', 'Down': 'Up'}
+
+
+def _simplify(route):
+    """Drop key pairs that cancel out (Left then Right ...)."""
+    out = []
+    for key in route:
+        if out and OPPOSITE[out[-1]] == key:
+            out.pop()
+        else:
+            out.append(key)
+    return out
+
+
+def _teach_route(send, cap, what):
+    """Manual: every L / R / U / D (or arrow key) the user presses is sent to the TV right away, so the
+    focus can be watched on the camera. Backspace sends the opposite key (undo). ENTER = the focus is on
+    `what`: returns the pressed keys (the TV is already there). ESC = cancel (None)."""
+    import Omedia_TC02 as planner                  # only its arrow-key codes
+    attention()
+    print(f"\n[NAV] MANUAL to {what}: press L R U D (or arrow keys) in the camera window - each key is sent "
+          "to the TV now. Backspace = undo, ENTER = the focus is on the target, ESC = cancel.")
+    taught = []
+    while True:
+        shown = _simplify(taught)
+        cv2.imshow(NAV_WINDOW, _overlay(_read(cap), [
+            (f"MANUAL to {what}: {', '.join(shown) or '-'}", (0, 255, 255), 0.7),
+            ("L R U D / arrows = send now   Backspace = undo", (255, 255, 255), 0.6),
+            ("ENTER = focus is on the target   ESC = cancel", (255, 255, 255), 0.6)]))
+        code = cv2.waitKeyEx(30)
+        if code == -1:
+            continue
+        char = chr(code & 0xFF).lower() if 0 <= code < 256 else ''
+        key = planner.ARROW_KEYS.get(code) or TEACH_KEYS.get(char)
+        if key:
+            send(ROUTE_KEYS[key], 0)
+            taught.append(key)
+            print(f"[NAV]   sent {key}  -> {', '.join(_simplify(taught))}")
+        elif code in (8,) and taught:
+            undo = OPPOSITE[taught[-1]]
+            send(ROUTE_KEYS[undo], 0)
+            taught.append(undo)
+            print(f"[NAV]   undo: sent {undo}  -> {', '.join(_simplify(taught))}")
+        elif code in (10, 13):
+            _close(NAV_WINDOW)
+            return taught
+        elif code == 27:
+            _close(NAV_WINDOW)
+            return None
+
+
+def _select_plan(cap, what, saved=None):
+    """LGC navigator (like Omedia_TC02.select_plan, with manual next to start over): click the highlighted
+    item, then the target; the planned keys are drawn. Arrow keys adjust, R = start over, M = manual (the
+    user presses L R U D and each key is sent), ENTER = go, Q = stop.
+    Returns (route, focus_point, target_point), or None for manual."""
+    import Omedia_TC02 as planner                     # drawing / tile helpers only
+    window = f"Select {what}"
+    clicks = list(saved or [])
+    plan = {'rows': 0, 'cols': 0, 'steps': None, 'tile': None}
+
+    def on_mouse(event, x, y, flags, parameter):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if len(clicks) >= 2:
+                clicks.clear()
+                plan['steps'] = None
+            clicks.append((x, y))
+
+    print(f"[NAV] Click (1) the item highlighted now, then (2) {what}. Arrow keys adjust, R = start over, "
+          "M = manual (L R U D, each key sent), ENTER = go, Q = stop.")
+    cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
+    cv2.setMouseCallback(window, on_mouse)
+    while True:
+        frame = _read(cap)
+        preview = frame.copy()
+        keys_line = ("R = start over   M = MANUAL (L R U D)   Q = stop", (255, 255, 255), 0.7)
+        if len(clicks) == 0:
+            lines = [("1) Click the item that is HIGHLIGHTED now", (0, 255, 0), 0.8), keys_line]
+        elif len(clicks) == 1:
+            cv2.circle(preview, clicks[0], 10, (255, 255, 255), 3)
+            lines = [(f"2) Click {what}", (0, 255, 0), 0.8), keys_line]
+        else:
+            if plan['steps'] is None:
+                plan['tile'] = planner.tile_box_at(frame, clicks[0])
+                plan['rows'], plan['cols'], plan['steps'] = planner.plan_moves(frame, clicks[0], clicks[1],
+                                                                               plan['tile'])
+            x, y, w, h = plan['tile']
+            cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 255, 255), 1)
+            planner.draw_plan(preview, clicks[0], plan['rows'], plan['cols'], plan['steps'])
+            route = planner.route_from_plan(plan['rows'], plan['cols'])
+            lines = [(f"Planned: {planner.describe_route(route)} + OK", (0, 255, 255), 0.8),
+                     ("Arrows adjust   ENTER = go", (255, 255, 255), 0.7), keys_line]
+        cv2.imshow(window, _overlay(preview, lines))
+        code = cv2.waitKeyEx(30)
+        if code in planner.ARROW_KEYS and len(clicks) == 2:
+            key = planner.ARROW_KEYS[code]
+            plan['rows'] += {'Down': 1, 'Up': -1}.get(key, 0)
+            plan['cols'] += {'Right': 1, 'Left': -1}.get(key, 0)
+        elif code in (10, 13) and len(clicks) == 2:
+            _close(window)
+            route = planner.route_from_plan(plan['rows'], plan['cols'])
+            print(f"[NAV] Planned keys to {what}: {planner.describe_route(route)} + OK")
+            return route, clicks[0], clicks[1]
+        elif code in (ord('r'), ord('R')):
+            clicks.clear()
+            plan['steps'] = None
+        elif code in (ord('m'), ord('M'), ord('s'), ord('S')):
+            _close(window)
+            return None
+        elif code in (ord('q'), ord('Q')):
+            _close(window)
+            raise KeyboardInterrupt(f"Selection of {what} canceled.")
+
+
+def _open_start(send, open_start):
+    """Open the screen a route starts on: open_start() when given, else Home."""
+    if open_start is None:
+        send('Home', 3)
+    else:
+        open_start()
+
+
+def plan_route_from_home(send, cap, soc, name, what, fallback, open_start=None, start_name='Home'):
+    """At the start of a TC (the user is there): open the start screen, show the navigator with the saved
+    path drawn (or click the highlighted item and the target), move there and check the focus arrived.
+
+    S in the navigator, or M after the move = manual: the user presses L R U D, each key goes to the TV at
+    once, ENTER takes the pressed keys as the route. open_start(): opens the screen the route starts on
+    (default: Home), start_name names it. Nothing is opened (no OK): Exit closes the start screen.
+    navigate_from_home() later shows the same path, moves and checks again, then OK.
+    """
+    import Omedia_TC02 as planner
+    saved_route, saved_clicks = _route_points(soc, name)
+    while True:
+        _open_start(send, open_start)
+        attention()
+        print(f"\n[NAV] {start_name} -> {what}: click the highlighted item, then {what}; arrow keys adjust, "
+              "ENTER = move there. M = MANUAL (you press L R U D, each key is sent to the TV).")
+        chosen = _select_plan(cap, what, saved_clicks)
+        if chosen is None:
+            taught = _teach_route(send, cap, what)
+            if taught is None:
+                send('Exit', 2)
+                continue
+            route, clicks = _simplify(taught), None
+            break
+        route, clicks = list(chosen[0]), _clicks_of(chosen)
+        ok, _, _ = _move_and_check(send, cap, route, clicks, what)
+        verdict = 'focus seen on the target' if ok else 'focus NOT seen on the target' if ok is False else 'look'
+        answer = _ask_on_screen(cap, [(f"{start_name} -> {what}: {', '.join(route) or 'no move'} ({verdict})",
+                                       (0, 255, 0) if ok else (0, 255, 255), 0.7),
+                                      ("Focus on the target?  ENTER = yes, save", (255, 255, 255), 0.7),
+                                      (f"R = click again   M = manual from {start_name} (L R U D)",
+                                       (255, 255, 255), 0.7)],
+                                ('\r', 'r', 'm'))
+        if answer == '\r':
+            break
+        if answer == 'm':
+            print(f"[NAV] Manual: opening {start_name} again; the route is only the keys you press now.")
+            send('Exit', 2)
+            _open_start(send, open_start)
+            taught = _teach_route(send, cap, what)
+            if taught is not None:
+                route, clicks = _simplify(taught), None
+                break
+        saved_clicks = None
+        send('Exit', 2)
+    _close(NAV_WINDOW)
+    _save_route(soc, name, route, clicks)
+    print(f"[NAV] Saved for {soc}: {start_name} -> {', '.join(route) or 'no move'} + OK")
     send('Exit', 2)
     return route
 
 
-def navigate_from_home(send, cap, soc, name, what, fallback):
-    """With Home on screen: move to an item and press OK, like the Omedia TCs.
+def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None):
+    """With the start screen (Home, LG Channels) on: show the navigator with the planned path, send the
+    route, check the focus reached the target, then OK.
 
-    The first time on a SoC the user clicks the highlighted item and the target on the camera view
-    (Omedia_TC02.select_plan: the planned keys are drawn, arrow keys adjust, Enter goes, S keeps fallback);
-    the route is saved per SoC and replayed without clicks afterwards. send(key, delay) sends one LGC key.
+    No saved route: the user clicks the highlighted item and the target (M = manual).
+    The focus not seen on the target: beep and ask - ENTER = OK anyway, R = click again from where the focus
+    is now, M = manual: the start screen is opened again (open_start(), else Home) and the keys the user
+    presses (each sent at once) are the new route, saved; Q = stop. send(key, delay) sends one LGC key.
     """
-    settings = _settings()
-    routes = settings['models'].setdefault(soc, {}).setdefault('routes', {})
-    route = routes.get(name)
+    import Omedia_TC02 as planner
+    route, clicks = _route_points(soc, name)
     if route is None:
-        import Omedia_TC02 as planner
-        print(f"\n[NAV] First time on {soc}: click the highlighted item, then {what}; ENTER sends the keys + OK.")
+        print(f"\n[NAV] First time on {soc}: click the highlighted item, then {what}; ENTER moves there. "
+              "M = MANUAL (you press L R U D).")
         attention()
-        chosen = planner.select_plan(cap, 1, what)
+        chosen = _select_plan(cap, what)
         if chosen is None:
-            route = list(fallback)
-            print(f"[NAV] Skipped: using the default keys {route}.")
-        else:
-            route = list(chosen[0])
-            routes[name] = route
-            save_configuration(SETTINGS_FILE, settings)
+            taught = _teach_route(send, cap, what)
+            if taught is None:
+                raise KeyboardInterrupt(f"Navigation to {what} canceled.")
+            route = _simplify(taught)
+            _save_route(soc, name, route, None)
             print(f"[NAV] Route to {what} saved for {soc}: {route or 'no move'}.")
-    print(f"[NAV] Home -> {what}: {', '.join(route) or 'no move'} + OK")
-    for key in route:
-        send(ROUTE_KEYS[key], 1)
+            send('OK', 2)
+            return
+        route, clicks = list(chosen[0]), _clicks_of(chosen)
+        _save_route(soc, name, route, clicks)
+        print(f"[NAV] Route to {what} saved for {soc}: {route or 'no move'}.")
+    else:
+        action = _show_navigator(cap, route, clicks, what)
+        if action == 'manual':
+            taught = _teach_route(send, cap, what)
+            if taught is not None:
+                route = _simplify(taught)
+                _save_route(soc, name, route, None)
+                print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
+                _close(NAV_WINDOW)
+                send('OK', 2)
+                return
+        elif action == 'replan':
+            chosen = _select_plan(cap, what)
+            if chosen is None:                                  # M: manual from the start screen (on now)
+                taught = _teach_route(send, cap, what)
+                if taught is not None:
+                    route = _simplify(taught)
+                    _save_route(soc, name, route, None)
+                    print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
+                    _close(NAV_WINDOW)
+                    send('OK', 2)
+                    return
+            else:
+                route, clicks = list(chosen[0]), _clicks_of(chosen)
+                _save_route(soc, name, route, clicks)
+                print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
+    print(f"[NAV] -> {what}: {', '.join(route) or 'no move'} + OK")
+    ok, _, _ = _move_and_check(send, cap, route, clicks, what)
+    while ok is False:
+        print(f"[NAV] The focus was not seen on {what}.")
+        answer = _ask_on_screen(cap, [(f"Focus NOT seen on {what}", (0, 0, 255), 0.8),
+                                      ("ENTER = OK anyway   R = click again", (255, 255, 255), 0.7),
+                                      ("M = manual from the start screen (L R U D)   Q = stop", (255, 255, 255), 0.7)],
+                                ('\r', 'r', 'm', 'q'))
+        if answer == 'q':
+            raise KeyboardInterrupt(f"Navigation to {what} stopped by the user.")
+        if answer == '\r':
+            break
+        if answer == 'r':
+            chosen = _select_plan(cap, what)                    # from where the focus is now
+            if chosen is not None:
+                ok, _, _ = _move_and_check(send, cap, list(chosen[0]), _clicks_of(chosen), what)
+                continue
+            answer = 'm'                                        # M in the navigator
+        if answer == 'm':
+            print("[NAV] Manual: opening the start screen again; the route is only the keys you press now.")
+            send('Exit', 2)
+            _open_start(send, open_start)
+            taught = _teach_route(send, cap, what)
+            if taught is None:
+                continue
+            route = _simplify(taught)
+            _save_route(soc, name, route, None)
+            print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
+            break
+    _close(NAV_WINDOW)
     send('OK', 2)
+
+
+def _measure_freeze_cut(capture, screen, run_idx, out_dir, timeout, key_at, pre_frames):
+    """Time from the key until the new channel cuts in after the old picture froze (FreezeCut)."""
+    import Omedia_TC02 as channel
+    x, y, w, h = screen
+    writer = channel.FrameWriter(os.path.join(out_dir, "frames"))
+    for index, (captured_at, frame, _) in enumerate(pre_frames, 1):
+        ms = (captured_at - key_at) * 1000.0
+        writer.save(f"frame_p{index:04d}_{ms:09.1f}ms_sim0.000.jpg",
+                    channel.draw_overlay(frame.copy(), [(f"RUN {run_idx}  BEFORE KEY  {ms / 1000.0:.3f} s",
+                                                         (255, 255, 255), 1.4)]))
+    detector, landed_ms, stop_at, count, last_ms = FreezeCut(), None, None, 0, 0.0
+    print(f"[RUN {run_idx}] Waiting for the old picture to freeze and the new channel to cut in...")
+    try:
+        while time.perf_counter() - key_at <= timeout:
+            captured = capture.get_frame()
+            if captured is None:
+                continue
+            captured_at, frame = captured
+            if captured_at < key_at:
+                continue
+            count += 1
+            last_ms = ms = (captured_at - key_at) * 1000.0
+            if landed_ms is None:
+                landed_ms = detector.feed(ms, _screen_small(frame, screen))
+                if landed_ms is not None:
+                    stop_at = ms + channel.STREAM_EXTRA_SECONDS * 1000.0
+                    print(f"[RUN {run_idx}] Landed at {landed_ms:.2f} ms.")
+                    winsound.Beep(1500, 250)
+                    winsound.Beep(2500, 350)
+            color = (0, 255, 0) if landed_ms is not None else (0, 255, 255)
+            lines = [(f"RUN {run_idx}  #{count}  TIMER {ms / 1000.0:.3f} s", color, 1.4),
+                     (f"Change {detector.step:.1f}  [{'landed' if landed_ms is not None else detector.phase}]",
+                      color, 1.0)]
+            if landed_ms is not None:
+                lines.append((f"LANDED at {landed_ms / 1000.0:.3f} s", (0, 255, 0), 1.0))
+            image = frame.copy()
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 255), 1)
+            writer.save(f"frame_{count:05d}_{ms:09.1f}ms_sim{min(detector.step / CUT_STEP, 9.999):.3f}.jpg",
+                        channel.draw_overlay(image.copy(), lines))
+            cv2.imshow(channel.CAPTURE_WINDOW, channel.draw_overlay(image, lines + list(STATUS())))
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                raise KeyboardInterrupt("Measurement canceled by user.")
+            if stop_at is not None and ms >= stop_at:
+                break
+    finally:
+        writer.close()
+    if landed_ms is None:
+        print(f"[RUN {run_idx}] No freeze -> cut within {timeout:g} s (did the channel change?).")
+        winsound.Beep(400, 700)
+    return {'status': 'PASS' if landed_ms is not None else 'FAIL',
+            'response_time_ms': landed_ms if landed_ms is not None else last_ms, 'frame_count': count}
 
 
 def measure_channel(cap, press_key, change_once, soc, out_dir, timeout, run_idx, run_label="RUN"):
@@ -472,14 +892,18 @@ def measure_channel(cap, press_key, change_once, soc, out_dir, timeout, run_idx,
     import Omedia_TC02 as channel            # the landing detection proven on Hisense and LG
     screen = ensure_screen(cap, soc)
     landing = ensure_landing(cap, soc, change_once)
+    freeze = (_settings()['models'].get(soc) or {}).get('transition') == 'freeze'
     capture = channel.CameraFrameCapture(cap)
     capture.start()
     try:
-        pre_frames, _, _ = channel.capture_pre_roll(capture, landing)
+        pre_frames, _, _ = channel.capture_pre_roll(capture, screen if freeze else landing)
         capture.clear_buffer()
         key_at = press_key()
-        result = channel.measure_landing(capture, landing, run_idx, out_dir, timeout, key_at, pre_frames,
-                                         require_black=True, screen_roi=screen)
+        if freeze:
+            result = _measure_freeze_cut(capture, screen, run_idx, out_dir, timeout, key_at, pre_frames)
+        else:
+            result = channel.measure_landing(capture, landing, run_idx, out_dir, timeout, key_at, pre_frames,
+                                             require_black=True, screen_roi=screen)
     finally:
         capture.stop()
     detected = result['status'] == 'PASS'
@@ -492,8 +916,63 @@ def measure_channel(cap, press_key, change_once, soc, out_dir, timeout, run_idx,
         'response_time_ms': result['response_time_ms'],
         'frame_count': result['frame_count'],
         'dir': out_dir,
-        'method': 'channel',
+        'method': 'channel-freeze' if freeze else 'channel',
     }
+
+
+# Channel change without a black screen (LG K25Lp, LGC 4.1.14): the old channel keeps playing ~0.8 s, then the
+# TV freezes its last picture (frame-to-frame change ~0.2-0.5) for ~0.8 s, then the new channel cuts in
+# (one frame 15-48, or a 2-3 frame crossfade). A cut of the old programme itself is not preceded by a freeze.
+FREEZE_SECONDS = 0.4            # still at least this long right before the cut
+FREEZE_STEP = 0.7               # frame-to-frame change of a still (frozen) picture
+FREEZE_FRACTION = 0.75          # share of still frames in that window (the channel banner animates in it)
+CUT_STEP = 10.0                 # frame-to-frame change of the cut to the new channel
+CUT_ONSET_STEP = 2.0            # the landing time is the first frame of the cut that moved this much
+CUT_PERSIST_SECONDS = 0.5       # the new picture must stay different from the frozen one this long
+CUT_MIN_REACTION_MS = 300
+
+
+def _screen_small(frame, screen):
+    x, y, w, h = screen
+    gray = cv2.GaussianBlur(cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY), (9, 9), 0)
+    return cv2.resize(gray, (64, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+
+
+class FreezeCut:
+    """Feed (elapsed_ms, screen image from _screen_small); returns the landing time once confirmed."""
+
+    def __init__(self):
+        self.history = []                 # (elapsed_ms, step, image)
+        self.candidate = None             # (onset_ms, frozen image)
+        self.step = 0.0
+        self.phase = 'playing'
+
+    def feed(self, elapsed_ms, image):
+        previous = self.history[-1][2] if self.history else None
+        self.step = float(np.mean(np.abs(image - previous))) if previous is not None else 0.0
+        self.history.append((elapsed_ms, self.step, image))
+        self.history = [h for h in self.history if h[0] >= elapsed_ms - 3000]
+        recent = [st for t, st, _ in self.history[:-1] if t >= elapsed_ms - FREEZE_SECONDS * 1000]
+        if self.candidate is None:
+            still = bool(recent) and sum(st <= FREEZE_STEP for st in recent) >= FREEZE_FRACTION * len(recent)
+            self.phase = 'frozen' if still else 'playing'
+            if elapsed_ms >= CUT_MIN_REACTION_MS and self.step >= CUT_STEP:
+                i = len(self.history) - 1          # back to the first frame of the cut (crossfade)
+                while i > 0 and len(self.history) - i < 4 and self.history[i - 1][1] >= CUT_ONSET_STEP:
+                    i -= 1
+                onset = self.history[i][0]
+                before = [st for t, st, _ in self.history[:i] if onset - FREEZE_SECONDS * 1000 <= t < onset]
+                if (i > 0 and len(before) >= 5
+                        and sum(st <= FREEZE_STEP for st in before) >= FREEZE_FRACTION * len(before)):
+                    self.candidate = (onset, self.history[i - 1][2])
+                    self.phase = 'cut'
+            return None
+        if float(np.mean(np.abs(image - self.candidate[1]))) < CUT_STEP * 0.6:
+            self.candidate, self.phase = None, 'playing'          # a flash (banner), not the new channel
+            return None
+        if elapsed_ms - self.candidate[0] >= CUT_PERSIST_SECONDS * 1000:
+            return self.candidate[0]
+        return None
 
 
 CHANNEL_KEYS = ('ChUp', 'ChDown')

@@ -8,6 +8,7 @@ import time
 import winsound
 
 import cv2
+import hangul_keys  # noqa: F401  keys typed in Korean mode count as the Latin key (y for ㅛ)
 import numpy as np
 
 WINDOW = "LGC FullSuite"

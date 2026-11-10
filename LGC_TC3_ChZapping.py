@@ -203,20 +203,9 @@ def send_shell_command_with_debug(ser, command):
 
 
 def wait_with_countdown_noKeyInput(seconds, description="Timer"):
-    """
-    Countdown timer without key input requirement (shortened in the quick flow check)
-    """
-    seconds = suite_progress.quick_seconds(seconds, description)
-    winsound.Beep(1000, 200)
-    print(f"\n[TIMER] {description}: {seconds} seconds")
-    
-    for remaining in range(seconds, 0, -1):
-        print(f"  ⏱ {remaining} seconds remaining...", end="\r")
-        time.sleep(1)
-    
-    print(" " * 50, end="\r")
-    winsound.Beep(1500, 300)
-    print(f"[TIMER] ✓ {description} Complete!\n")
+    """Timed wait: camera view with run / step / time left, sounds at start, last 3 s and end
+    (shortened in the quick flow check)."""
+    suite_progress.countdown(seconds, description)
 
 
 async def run_ac_power_cycle(ip, off_seconds):
@@ -227,11 +216,13 @@ async def run_ac_power_cycle(ip, off_seconds):
         dev = SmartPlug(ip)
         await dev.update()
         await dev.turn_off()
+        suite_progress.sound('ac_off')
         print(f"✓ Device powered OFF")
         
-        await asyncio.sleep(suite_progress.quick_seconds(off_seconds, "AC power OFF"))
+        suite_progress.countdown(off_seconds, "AC power OFF", as_step=False)
         
         await dev.turn_on()
+        suite_progress.sound('ac_on')
         print(f"✓ Device powered ON")
     except Exception as e:
         print(f"❌ Power cycle failed: {e}")
@@ -293,6 +284,7 @@ def main():
     # Initialize camera
     cap = initialize_camera()
     suite_progress.state['camera'] = cap
+    suite_progress.begin_tc(1, 1, "TC3_ChZapping", num_runs, cap)
 
     # Live TV is entered from Home ~4 min into the run (after the AC cycle): ask the route now
     lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, SoC,
@@ -349,6 +341,9 @@ def main():
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
         print(f"{'='*60}")
+        suite_progress.state.update(run_idx=run_idx, steps=[], step=0)
+        if run_idx > 1:
+            suite_progress.sound('tc_start')
         
         # Create run directory
         ts_run = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -389,11 +384,8 @@ def main():
         if run_idx < num_runs:
             
             wait_with_countdown_noKeyInput(5, f"T2 Tennis {t2_channel}")
-            
-    
 
-
-
+    suite_progress.sound('all_done')
 
     # Summary
     print(f"\n{'='*60}")

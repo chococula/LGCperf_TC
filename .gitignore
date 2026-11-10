@@ -11,3 +11,4 @@ ir_capture_*_raw.log
 LGC_Home_reference_*.jpg
 LGC_similarity_config.json
 LGC_*_reference_*.jpg
+LGC_lineup_*.json
