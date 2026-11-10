@@ -683,9 +683,9 @@ def show_tc05_channels(label, pair, from_kind, to_kind):
 
 def prepare_black_area(ser, cap, config, label, key, src):
     """Once per SoC: one unmeasured key from the From channel, the user picks the black / logo screen and the
-    black area; back on the From channel by number."""
+    black area; back on the From channel with the opposite key."""
     def back():
-        go_to_channel(ser, src, delay=TC05_DIGIT_GAP)
+        send_key(ser, OPPOSITE_KEY[key], 0)
         wait_with_countdown_noKeyInput(10, f"Back on {src}")
     lgc_similarity.ensure_black_area(cap, config['SoC'], label.lower(), f"{label} {key}",
                                      lambda: send_key(ser, key, 0), back)
@@ -693,8 +693,8 @@ def prepare_black_area(ser, cap, config, label, key, src):
 
 def _run_tc05(ser, cap, config, run_idx, csv_path, label):
     """One TC05 case with the pair chosen from the lineup: From --key--> To is measured 5 times.
-    NtN (like TC03): on To, the opposite key (unmeasured) goes to From, 10 s, the key back to To is measured.
-    NtP / PtP: From by number (10 s), the key into To is measured."""
+    The From channel is entered by number once (after LIVE); every later cycle returns to it with the
+    opposite key (ChUp <-> ChDown), 10 s, then the key into To is measured."""
     timeout = config['timeout']
     pair = config[TC05_PAIR_KEY[label]]
     src, key, dst = pair['from'], pair['key'], pair['to']
@@ -704,8 +704,7 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
     base_dir = make_dir("C:/Temp", f"LGC_Perf_{label}", run_idx, ts_run, config)
     print(f"Output directory: {base_dir}")
 
-    by_reverse = label == 'TC05_NtN'
-    _tc05_live_precondition(ser, cap, config, dst if by_reverse else src)
+    _tc05_live_precondition(ser, cap, config, src)
     black_area = label in TC05_BLACK_AREA
     if black_area:
         # One-time per SoC: the black area of the black / logo screen (one unmeasured key, then back).
@@ -717,10 +716,8 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
     results = []
     for cycle_idx in range(1, TC05_REPEAT[label] + 1):
         print(f"\n[{label}] Scenario cycle {cycle_idx}/{TC05_REPEAT[label]}")
-        if by_reverse:
-            send_key(ser, OPPOSITE_KEY[key], 0)
-        else:
-            go_to_channel(ser, src, delay=TC05_DIGIT_GAP)
+        if cycle_idx > 1:
+            send_key(ser, OPPOSITE_KEY[key], 0)            # back to From: ChUp -> ChDown, ChDown -> ChUp
         wait_with_countdown_noKeyInput(10, f"{from_kind} {src}")
 
         print(f"[{label}] Measuring {key}: {from_kind} {src} -> {to_kind} {dst}")
@@ -736,8 +733,7 @@ def _run_tc05(ser, cap, config, run_idx, csv_path, label):
             result['source_channel'] = src
             result['target_channel'] = dst
             results.append(result)
-        # Let the new channel finish starting before the next keys: number keys sent while the stream is
-        # still starting lose their first digit (163 arrived as 63).
+        # Let the new channel finish starting before the next key.
         wait_with_countdown_noKeyInput(TC05_AFTER_MEASURE_SECONDS, f"{to_kind} {dst} playing")
 
     return results

@@ -353,8 +353,9 @@ def main():
 
     # One-time per SoC: the black area of the black / logo screen before the Pluto picture
     # (one unmeasured key, the user picks the frame and drags the area, then back on the From channel).
+    back_key = 'ChDown' if measure_key == 'ChUp' else 'ChUp'
     def back_on_src():
-        go_to_channel(ser, src, delay=0.5)
+        send_key(ser, back_key, 0)
         wait_with_countdown_noKeyInput(10, f"Back on {src}")
     lgc_similarity.ensure_black_area(cap, config['SoC'], LABEL.lower(), f"{LABEL} {measure_key}",
                                      lambda: send_key(ser, measure_key, 0), back_on_src)
@@ -377,7 +378,8 @@ def main():
         print(f"Output directory: {dir_path}")
         
         try:
-            go_to_channel(ser, src, delay=0.5)
+            if run_idx > 1:
+                send_key(ser, back_key, 0)       # back to From with the opposite key (no number keys)
             wait_with_countdown_noKeyInput(10, f"{FROM_KIND} {src}")
 
             # Measured: ChUp / ChDown from the From channel into the To channel
