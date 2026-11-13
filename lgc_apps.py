@@ -56,7 +56,9 @@ def check_apps(send, cap, soc, apps):
     """Before the run (the user is at the TV): for every app, confirm its navigator route from Home (planned
     path drawn, the keys are sent and the focus is checked); apps that need an account are then opened and
     the user confirms on the camera view that they are installed and signed in (R = open again after
-    fixing it on the TV, S = skip the check, Q = stop). Returns {app: 'ok' | 'skipped' | 'route'}."""
+    fixing it on the TV, S = skip the check, Q = stop), and then the navigation inside the app is asked
+    step by step until it streams (teach_in_app; the run replays it without asking).
+    Returns {app: 'ok' | 'skipped' | 'route'}."""
     status = {}
     for app in apps:
         name, fallback, needs_sign_in = APPS[app]
@@ -80,6 +82,10 @@ def check_apps(send, cap, soc, apps):
             if answer == '\r':
                 status[app] = 'ok'
                 print(f"[APPS] {app}: installed and signed in (confirmed).")
+                # every app works differently inside: navigation steps from its first screen until it
+                # streams (navigator / M, 'stop navigating?' after each step until Y), saved for the run
+                print(f"[APPS] {app}: navigation inside the app until the video streams")
+                teach_in_app(send, cap, soc, app)
                 break
             if answer == 's':
                 status[app] = 'skipped'
