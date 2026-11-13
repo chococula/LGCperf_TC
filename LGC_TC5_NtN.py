@@ -334,19 +334,19 @@ def main():
     asyncio.run(run_ac_power_cycle(ip, 60))
     wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    print("\n[STEP] Home -> LG Channels")
+    suite_progress.announce("\n[STEP] Home -> LG Channels")
     send_key(ser, 'Home', 3)
     lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
                                       'tc05_lgc_app', "LG Channels on Home", APP_ROUTE)
     wait_with_countdown_noKeyInput(15, "LG Channels")
 
-    print("\n[STEP] LIVE")
+    suite_progress.announce("\n[STEP] LIVE")
     lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
                                       'tc05_lgc_live', "LIVE in LG Channels", LIVE_ROUTE,
                                       open_start=lambda: open_lg_channels_home(ser, config['SoC']))
     wait_with_countdown_noKeyInput(10, "LIVE")
 
-    print(f"\n[STEP] Channel {t2_channel}")
+    suite_progress.announce(f"\n[STEP] Channel {t2_channel}")
     send_key(ser, 'Num_00', 1.5)   # throwaway digit: the first key lands before the entry field is ready
     go_to_channel(ser, t2_channel, delay=0.5)
     wait_with_countdown_noKeyInput(10, f"Native {t2_channel}")

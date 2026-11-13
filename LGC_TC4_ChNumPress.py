@@ -313,7 +313,7 @@ def main():
     asyncio.run(run_ac_power_cycle(ip, 60))
     wait_with_countdown_noKeyInput(180, "Power ON Stabilization")
 
-    print("\n[STEP] Home -> PIP Live TV")
+    suite_progress.announce("\n[STEP] Home -> PIP Live TV")
     send_key(ser, 'Home', 3)
     lgc_similarity.navigate_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
                                       'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
@@ -344,7 +344,7 @@ def main():
         print(f"Output directory: {dir_path}")
 
         try:
-            print(f"\n[STEP] Channel {source_channel} (NBC)")
+            suite_progress.announce(f"\n[STEP] Channel {source_channel} (NBC)")
             go_to_channel(ser, source_channel, delay=1)
             wait_with_countdown_noKeyInput(180, f"NBC {source_channel}")
 

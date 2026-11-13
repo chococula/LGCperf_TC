@@ -4,6 +4,7 @@ Before each TC run its steps (timed waits, AC power cycles, measurements) are co
 TC function with every TV, camera and plug action replaced; during the real run each such action calls
 step(), so the screen and the console show "TC 2/4 TC03 | Step 5/21 NBC 11-1 | 02:31 left".
 """
+import sys
 import time
 import winsound
 
@@ -43,8 +44,16 @@ def _tones(*notes):
     lgc_sound.play(*notes)               # one sound, so a Bluetooth output does not drop the first notes
 
 
+STEP_SOUND_GAP = 2.0           # a step sound this soon after the last one is skipped (no double sound)
+_last_step_sound = [-1e9]
+
+
 def sound(event):
-    """tc_start, countdown_start, tick (last 3 s), countdown_end, ac_off, ac_on, attention, tc_done, all_done."""
+    """tc_start, step, countdown_start, tick (last 3 s), countdown_end, ac_off, ac_on, attention, tc_done,
+    all_done."""
+    if event == 'step':
+        if time.perf_counter() - _last_step_sound[0] < STEP_SOUND_GAP:
+            return
     _tones(*{
         'tc_start': ((660, 120), (880, 120), (1100, 160)),
         'step': ((880, 90), (1320, 140)),          # every step of a TC run starts
@@ -57,6 +66,14 @@ def sound(event):
         'tc_done': ((1200, 150), (1500, 250)),
         'all_done': ((1047, 150), (1319, 150), (1568, 150), (2093, 400)),
     }[event])
+    if event == 'step':
+        _last_step_sound[0] = time.perf_counter()
+
+
+def announce(text):
+    """A [STEP] line of a TC: printed, with the step sound (every step is heard, not only the timed waits)."""
+    print(text)
+    sound('step')
 
 
 # ---------- plan and position ----------
@@ -180,6 +197,7 @@ def plan_steps(module, run_fn, args, extra_patches=()):
         return None
 
     patches = [
+        (sys.modules[__name__], 'announce', lambda *a, **k: None),
         (module, 'send_key', lambda *a, **k: None),
         (module, 'send_shell_command_with_debug', lambda *a, **k: None),
         (module, 'wait_with_countdown_noKeyInput', lambda seconds, description="Timer": record('wait', description, seconds)),

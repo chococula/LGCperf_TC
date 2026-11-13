@@ -350,6 +350,32 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Starting {num_runs} Test Runs")
     print(f"{'='*60}\n")
+
+    # Once before the runs: each app installed / signed in and playing 1 min
+    print("\n[SETUP] Installing/launching Amazon - play 1 min...")
+    send_key(ser, 'Home', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon',
+                         legacy=lambda: (send_key(ser, 'OK', 2), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 2), wait_for_screen_stable(cap, timeout=30)))
+    wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
+
+    print("\n[SETUP] Installing/launching Netflix - play 1 min...")
+    send_key(ser, 'Home', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
+                         legacy=lambda: (send_key(ser, 'OK', 3), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
+    wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
+
+    print("\n[SETUP] Launching YouTube - play 1 min...")
+    send_key(ser, 'Home', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
+                         legacy=lambda: (send_key(ser, 'OK', 2), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 2), wait_for_screen_stable(cap, timeout=30)))
+    wait_with_countdown_noKeyInput(60, "YouTube Video Playback")
+
     
     # Main test loop
     for run_idx in range(1, num_runs + 1):
@@ -371,7 +397,7 @@ def main():
         
         try:
             # Step 1: LiveTV Fox 36-1, wait 1 min
-            print("\n[STEP 1] Live TV Fox 36-1...")
+            suite_progress.announce("\n[STEP 1] Live TV Fox 36-1...")
             send_key(ser, 'Exit', 2)
             send_key(ser, 'LiveTV', 5)
             send_key(ser, 'Num_03', 1)
@@ -381,15 +407,17 @@ def main():
             send_key(ser, 'OK', 5)
             wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
-            # Step 2: DC Off (2 min) → DC On
-            print("\n[STEP 2] DC Power Cycle (OFF 2 min)...")
-            asyncio.run(run_ac_power_cycle(ip, 120))
+            # Step 2: DC Off (2 min) -> DC On (power key over RS-232, not the AC plug)
+            suite_progress.announce("\n[STEP 2] DC Power Cycle (OFF 2 min)...")
+            send_key(ser, 'P_OFF', 0)
+            wait_with_countdown_noKeyInput(120, "DC power OFF 2 min")
+            send_key(ser, 'P_ON', 0)
 
             # Step 3: Wait 1 min after DC On
-            wait_with_countdown_noKeyInput(60, "Boot Stabilization")
+            wait_with_countdown_noKeyInput(60, "DC power ON 1 min")
 
             # Step 4: Amazon (4th app: LGC > YT > Netflix > Amazon), play 1 min
-            print("\n[STEP 4] Launching Amazon...")
+            suite_progress.announce("\n[STEP 4] Launching Amazon...")
             send_key(ser, 'Home', 2)
             lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon',
@@ -398,7 +426,7 @@ def main():
             wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
 
             # Step 5: Netflix (3rd app: LGC > YT > Netflix), play 1 min
-            print("\n[STEP 5] Launching Netflix...")
+            suite_progress.announce("\n[STEP 5] Launching Netflix...")
             send_key(ser, 'Home', 3)
             lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
@@ -407,7 +435,7 @@ def main():
             wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
             # Step 6: YouTube (2nd app), play 3 min
-            print("\n[STEP 6] Launching YouTube...")
+            suite_progress.announce("\n[STEP 6] Launching YouTube...")
             send_key(ser, 'Home', 2)
             lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
@@ -416,12 +444,12 @@ def main():
             wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
             # Step 7: Home, wait 30s
-            print("\n[STEP 7] Returning to Home...")
+            suite_progress.announce("\n[STEP 7] Returning to Home...")
             send_key(ser, 'Home', 2)
             wait_with_countdown_noKeyInput(30, "Home Screen")
 
             # Step 8: LG Channels (1st app) — focus then measure
-            print("\n[STEP 8] Entering LG Channels - measuring load time...")
+            suite_progress.announce("\n[STEP 8] Entering LG Channels - measuring load time...")
             lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'LG Channels')
 
             result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
@@ -444,15 +472,7 @@ def main():
         except Exception as e:
             print(f"❌ Error in run {run_idx}: {e}")
         
-        # Wait before next run
-        if run_idx < num_runs:
-            wait_with_countdown_noKeyInput(10, "Interval between runs")
-
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'Back', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'OK', 2)
+        # the next run starts right away with Exit -> LiveTV 36-1 (no interval in the TC10 scenario)
 
     suite_progress.sound('all_done')
 

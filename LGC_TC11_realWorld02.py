@@ -78,7 +78,14 @@ def get_user_configuration():
         except ValueError:
             print("❌ Please enter a valid number.")
     
+    # Live TV channel (IP 195 or 597)
+    channel = input("Live TV channel (IP 195 / 597) (default: 195): ").strip() or "195"
+    if not all(c.isdigit() or c == '-' for c in channel):
+        print(f"⚠ Invalid channel {channel}: using 195.")
+        channel = "195"
+
     config = {
+        'channel': channel,
         'ip': ip,
         'port': port,
         'SoC': SoC,
@@ -303,11 +310,14 @@ def initialize_camera(camera_index=0):
 
 
 def perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK', mode=None,
-                             target=None):
+                             target=None, before_key=None):
     """End detection like the Omedia TCs (lgc_similarity.detect): CH+/CH- = the screen goes black, then the
-    picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped."""
+    picture lands; screens = similarity with a saved reference (+ movement stopped); scrolls = movement stopped.
+    before_key(): sent after the pre-roll, right before the measured key (PIP focus -> LG Channels)."""
     def press():
         winsound.Beep(800, 200)
+        if before_key:
+            before_key()
         sent_at = time.perf_counter()
         send_key(ser, trigger_key, 0)
         return sent_at
@@ -342,6 +352,8 @@ def main():
     # The apps this TC uses: navigator route from Home + installed / signed in, checked on the camera
     lgc_apps.check_apps(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
                         lgc_apps.apps_for(['TC11']))
+    # the run ends with the PIP focus and, at once, LG Channels: the route between them is checked now
+    lgc_apps.plan_pip_to_lg_channels(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'])
     
     # CSV path
     csv_path = "tv_response_QUICK.csv" if quick else "tv_response.csv"
@@ -371,27 +383,25 @@ def main():
         
         try:
 
-            # Step 1 : DC Power cycle
+            # Step 1: DC off 2 min -> DC on, 1 min
+            suite_progress.announce("\n[STEP 1] DC Power cycle (OFF 2 min)...")
             send_key(ser, 'P_OFF', 0)
-            wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
-
+            wait_with_countdown_noKeyInput(120, "DC power OFF 2 min")
             send_key(ser, 'P_ON', 0)
+            wait_with_countdown_noKeyInput(60, "DC power ON 1 min")
 
-            wait_with_countdown_noKeyInput(180, "Boot Stabilization")
-
-            # Step 2: LiveTV Fox 36-1, wait 1 min
-            print("\n[STEP 1] Live TV Fox 36-1...")
+            # Step 2: Live TV channel (IP 195 / 597), 1 min
+            channel = config['channel']
+            suite_progress.announce(f"\n[STEP 2] Live TV channel {channel}...")
             send_key(ser, 'Exit', 2)
             send_key(ser, 'LiveTV', 5)
-            send_key(ser, 'Num_03', 1)
-            send_key(ser, 'Num_06', 1)
-            send_key(ser, 'DASH', 1)
-            send_key(ser, 'Num_01', 1)
+            for char in channel:
+                send_key(ser, 'DASH' if char == '-' else f'Num_0{char}', 1)
             send_key(ser, 'OK', 5)
-            wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
+            wait_with_countdown_noKeyInput(60, f"Live TV {channel}")
 
-            # Step 3: Netflix (3rd app: LGC > YT > Netflix), play 1 min
-            print("\n[STEP 5] Launching Netflix...")
+            # Step 3: Netflix, play 1 min
+            suite_progress.announce("\n[STEP 3] Launching Netflix...")
             send_key(ser, 'Home', 3)
             lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
@@ -399,8 +409,8 @@ def main():
                                                  send_key(ser, 'OK', 0), wait_for_screen_stable(cap, timeout=30)))
             wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
-            # Step 6: YouTube (2nd app), play 3 min
-            print("\n[STEP 6] Launching YouTube...")
+            # Step 4: YouTube, play 3 min
+            suite_progress.announce("\n[STEP 4] Launching YouTube...")
             send_key(ser, 'Home', 3)
             lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
             lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
@@ -408,22 +418,17 @@ def main():
                                                  send_key(ser, 'OK', 0), wait_for_screen_stable(cap, timeout=30)))
             wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
-            # Step 7: Home, wait 30s
-            print("\n[STEP 7] Returning to Home...")
+            # Step 5: Home, 30 s in all (the measurement's pre-roll is the last part of it)
+            suite_progress.announce("\n[STEP 5] Returning to Home...")
             send_key(ser, 'Home', 2)
-            wait_with_countdown_noKeyInput(30, "Home Screen")
+            wait_with_countdown_noKeyInput(30 - int(lgc_similarity.PRE_ROLL_SECONDS), "Home Screen")
 
-            # Step 8: PIP Launching
-            print("\n[STEP 8] Entering PIP. Switching before fullscreen...")
-            lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Live TV PIP')
-            send_key(ser, 'OK', 1)
-
-            # Step 9: LG Channels (1st app)
-            print("\n[STEP 9] Entering LG Channels - measuring load time...")
-            send_key(ser, 'Home', 2)
-            lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'LG Channels')
-
-            result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
+            # Step 6: Home PIP focus and, right after (before the PIP picture shows), LG Channels: measured
+            suite_progress.announce("\n[STEP 6] Home PIP focus -> LG Channels at once - measuring load time...")
+            result = perform_motion_detection(
+                ser, cap, run_idx, dir_path, timeout, config,
+                before_key=lambda: lgc_apps.pip_then_lg_channels(lambda key, delay: send_key(ser, key, delay),
+                                                                 config['SoC']))
 
             if result:
                 results.append(result)
@@ -443,15 +448,7 @@ def main():
         except Exception as e:
             print(f"❌ Error in run {run_idx}: {e}")
         
-        # Wait before next run
-        if run_idx < num_runs:
-            wait_with_countdown_noKeyInput(10, "Interval between runs")
-
-            send_key(ser, 'Home', 2)
-            send_key(ser, 'Back', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'DpadUp', 2)
-            send_key(ser, 'OK', 2)
+        # the next run starts right away with the DC power cycle (no interval in the TC11 scenario)
 
     suite_progress.sound('all_done')
 

@@ -41,6 +41,46 @@ def focus_app(send, cap, soc, app):
     lgc_similarity.navigate_from_home(send, cap, soc, name, f"{app} on Home", fallback, press_ok=False)
 
 
+# TC11 end: on Home the Live TV PIP is focused and, right after (before the PIP picture shows), the focus
+# moves to LG Channels, which is opened (measured). Route from the PIP focus to the LG Channels tile:
+PIP_TO_LGC = ('tc11_pip_lg_channels', ['Up', 'Right'])
+FAST_KEY_GAP = 0.4             # seconds between the keys of the PIP -> LG Channels move (no camera check)
+
+
+def _focus_pip(send, soc):
+    name, fallback, _ = APPS['Live TV PIP']
+    send('Home', 3)
+    lgc_similarity.replay_route(send, soc, name, fallback)
+
+
+def plan_pip_to_lg_channels(send, cap, soc):
+    """Before the run (the user is there): the navigator route from the Home PIP focus to LG Channels."""
+    print("\n[APPS] TC11: route from the Live TV PIP focus on Home to LG Channels")
+    lgc_similarity.plan_route_from_home(send, cap, soc, PIP_TO_LGC[0], "LG Channels (from the PIP focus)",
+                                        PIP_TO_LGC[1], open_start=lambda: _focus_pip(send, soc),
+                                        start_name='Home PIP focus')
+
+
+def focus_pip(send, soc):
+    """With Home on: the saved keys to the Live TV PIP (focus only, no OK, no camera check)."""
+    name, fallback, _ = APPS['Live TV PIP']
+    pip = lgc_similarity.replay_route(send, soc, name, fallback, delay=FAST_KEY_GAP)
+    print(f"[APP] Home PIP focus ({', '.join(pip)})")
+
+
+def lg_channels_from_pip(send, soc):
+    """With the PIP focused: the saved keys to the LG Channels tile (no OK: the caller sends it, measured)."""
+    move = lgc_similarity.replay_route(send, soc, PIP_TO_LGC[0], PIP_TO_LGC[1], delay=FAST_KEY_GAP)
+    print(f"[APP] PIP -> LG Channels ({', '.join(move)}), {FAST_KEY_GAP} s per key")
+
+
+def pip_then_lg_channels(send, soc):
+    """TC11: with Home on, the PIP focus, then at once the move to LG Channels (sent fast, so it happens
+    before the PIP picture shows). No OK: the caller sends it (measured)."""
+    focus_pip(send, soc)
+    lg_channels_from_pip(send, soc)
+
+
 def _show(cap, seconds, lines):
     end = time.perf_counter() + seconds
     while time.perf_counter() < end:

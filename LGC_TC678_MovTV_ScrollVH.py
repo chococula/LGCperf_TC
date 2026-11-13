@@ -241,7 +241,7 @@ def main():
 
         try:
             # Step 1: Live TV 36-1, wait 60s
-            print("\n[STEP 1] Live TV 36-1 pre-load...")
+            suite_progress.announce("\n[STEP 1] Live TV 36-1 pre-load...")
             send_key(ser, 'Exit', 2)
             send_key(ser, 'LiveTV', 3)
             send_key(ser, 'Num_03', 1)
@@ -252,21 +252,21 @@ def main():
             wait_with_countdown_noKeyInput(60, "Live TV 36-1 Stabilization")
 
             # Step 2: AC Power Cycle — OFF 60s, then ON
-            print("\n[STEP 2] AC Power Cycle...")
+            suite_progress.announce("\n[STEP 2] AC Power Cycle...")
             asyncio.run(run_ac_power_cycle(ip, 60))
 
             # Step 3: Wait 3 minutes for boot
             wait_with_countdown_noKeyInput(180, "Boot Stabilization")
 
             # Step 4: Enter LG Channel, wait 30s
-            print("\n[STEP 4] Entering LG Channels...")
+            suite_progress.announce("\n[STEP 4] Entering LG Channels...")
             send_key(ser, 'Home', 2)
             send_key(ser, 'DpadRt', 2)
             send_key(ser, 'OK', 2)
             wait_with_countdown_noKeyInput(30, "LG Channels Loading")
 
             # Step 5: Navigate to Movies and TV in left sidebar
-            print("\n[STEP 5] Navigating to Movies and TV...")
+            suite_progress.announce("\n[STEP 5] Navigating to Movies and TV...")
             send_key(ser, 'DpadLt', 2)   # Open left category sidebar
             send_key(ser, 'DpadLt', 2)
             send_key(ser, 'DpadLt', 2)
@@ -298,7 +298,7 @@ def main():
                     df.to_csv(csv_path, mode='a', header=write_header, index=False)
 
             # Step 7: Scroll down and measure
-            print("\n[STEP 7] Measuring scroll-down load time...")
+            suite_progress.announce("\n[STEP 7] Measuring scroll-down load time...")
             dir_path_scroll = dir_path + "_Scroll"
             os.makedirs(dir_path_scroll, exist_ok=True)
 
@@ -326,7 +326,7 @@ def main():
                     df_scroll.to_csv(csv_path, mode='a', header=write_header, index=False)
 
             # Step 8: Scroll right and measure
-            print("\n[STEP 8] Measuring scroll-right load time...")
+            suite_progress.announce("\n[STEP 8] Measuring scroll-right load time...")
             dir_path_scroll_rt = dir_path + "_ScrollRight"
             os.makedirs(dir_path_scroll_rt, exist_ok=True)
 

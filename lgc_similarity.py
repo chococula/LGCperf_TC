@@ -479,7 +479,23 @@ def _navigator_image(frame, route, clicks, lines):
 
 
 NAV_CHECK_SECONDS = 10         # during the run the navigator waits this long for the user, then goes
-CONFIRMED_ROUTES = set()       # routes the user confirmed in this run of the script: no 10 s wait again
+CONFIRMED_ROUTES = set()       # routes the user confirmed (this run or saved): no 10 s wait again
+
+
+def _confirm_route(soc, name):
+    """The route worked / was confirmed once: no navigator wait from now on, also in later runs."""
+    if (soc, name) in CONFIRMED_ROUTES:
+        return
+    CONFIRMED_ROUTES.add((soc, name))
+    settings = _settings()
+    done = settings['models'].setdefault(soc, {}).setdefault('confirmed_routes', [])
+    if name not in done:
+        done.append(name)
+        save_configuration(SETTINGS_FILE, settings)
+
+
+def _route_confirmed(soc, name):
+    return (soc, name) in CONFIRMED_ROUTES or name in ((_settings()['models'].get(soc) or {}).get('confirmed_routes') or [])
 
 
 def _show_navigator(cap, route, clicks, what, seconds=NAV_CHECK_SECONDS):
@@ -747,7 +763,7 @@ def plan_route_from_home(send, cap, soc, name, what, fallback, open_start=None, 
         send('Exit', 2)
     _close(NAV_WINDOW)
     _save_route(soc, name, route, clicks)
-    CONFIRMED_ROUTES.add((soc, name))
+    _confirm_route(soc, name)
     print(f"[NAV] Saved for {soc}: {start_name} -> {', '.join(route) or 'no move'} + OK")
     send('Exit', 2)
     return route
@@ -782,7 +798,7 @@ def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None, pr
         route, clicks = list(chosen[0]), _clicks_of(chosen)
         _save_route(soc, name, route, clicks)
         print(f"[NAV] Route to {what} saved for {soc}: {route or 'no move'}.")
-    elif (soc, name) in CONFIRMED_ROUTES:
+    elif _route_confirmed(soc, name):
         print(f"[NAV] {what}: confirmed before, going without the wait.")
     else:
         action = _show_navigator(cap, route, clicks, what)
@@ -815,7 +831,7 @@ def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None, pr
     print(f"[NAV] -> {what}: {', '.join(route) or 'no move'}" + (" + OK" if press_ok else " (focus only)"))
     ok, _, _ = _move_and_check(send, cap, route, clicks, what)
     if ok is not False:
-        CONFIRMED_ROUTES.add((soc, name))              # worked once: later uses go without the wait
+        _confirm_route(soc, name)                      # worked once: later uses go without the wait
     while ok is False:
         print(f"[NAV] The focus was not seen on {what}.")
         answer = _ask_on_screen(cap, [(f"Focus NOT seen on {what}", (0, 0, 255), 0.8),
