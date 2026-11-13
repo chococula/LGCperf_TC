@@ -17,6 +17,7 @@ import time
 
 import cv2
 import hangul_keys  # noqa: F401  keys typed in Korean mode count as the Latin key (y for ㅛ)
+import lgc_sound  # noqa: F401  every beep is heard on a Bluetooth soundbar (silence in front to wake it)
 import numpy as np
 import pandas as pd
 import winsound
@@ -478,6 +479,7 @@ def _navigator_image(frame, route, clicks, lines):
 
 
 NAV_CHECK_SECONDS = 10         # during the run the navigator waits this long for the user, then goes
+CONFIRMED_ROUTES = set()       # routes the user confirmed in this run of the script: no 10 s wait again
 
 
 def _show_navigator(cap, route, clicks, what, seconds=NAV_CHECK_SECONDS):
@@ -623,7 +625,7 @@ def _teach_route(send, cap, what):
             return None
 
 
-def _select_plan(cap, what, saved=None):
+def _select_plan(cap, what, saved=None, done_text=None):
     """LGC navigator (like Omedia_TC02.select_plan, with manual next to start over): click the highlighted
     item, then the target; the planned keys are drawn. Arrow keys adjust, R = start over, M = manual (the
     user presses L R U D and each key is sent), ENTER = go, Q = stop.
@@ -647,7 +649,8 @@ def _select_plan(cap, what, saved=None):
     while True:
         frame = _read(cap)
         preview = frame.copy()
-        keys_line = ("R = start over   M = MANUAL (L R U D)   Q = stop", (255, 255, 255), 0.7)
+        keys_line = ("R = start over   M = MANUAL (L R U D)   Q = stop"
+                     + (f"   P = {done_text}" if done_text else ""), (255, 255, 255), 0.7)
         if len(clicks) == 0:
             lines = [("1) Click the item that is HIGHLIGHTED now", (0, 255, 0), 0.8), keys_line]
         elif len(clicks) == 1:
@@ -678,6 +681,9 @@ def _select_plan(cap, what, saved=None):
         elif code in (ord('r'), ord('R')):
             clicks.clear()
             plan['steps'] = None
+        elif done_text and code in (ord('p'), ord('P')):
+            _close(window)
+            return 'done'
         elif code in (ord('m'), ord('M'), ord('s'), ord('S')):
             _close(window)
             return None
@@ -741,12 +747,13 @@ def plan_route_from_home(send, cap, soc, name, what, fallback, open_start=None, 
         send('Exit', 2)
     _close(NAV_WINDOW)
     _save_route(soc, name, route, clicks)
+    CONFIRMED_ROUTES.add((soc, name))
     print(f"[NAV] Saved for {soc}: {start_name} -> {', '.join(route) or 'no move'} + OK")
     send('Exit', 2)
     return route
 
 
-def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None):
+def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None, press_ok=True):
     """With the start screen (Home, LG Channels) on: show the navigator with the planned path, send the
     route, check the focus reached the target, then OK.
 
@@ -769,11 +776,14 @@ def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None):
             route = _simplify(taught)
             _save_route(soc, name, route, None)
             print(f"[NAV] Route to {what} saved for {soc}: {route or 'no move'}.")
-            send('OK', 2)
+            if press_ok:
+                send('OK', 2)
             return
         route, clicks = list(chosen[0]), _clicks_of(chosen)
         _save_route(soc, name, route, clicks)
         print(f"[NAV] Route to {what} saved for {soc}: {route or 'no move'}.")
+    elif (soc, name) in CONFIRMED_ROUTES:
+        print(f"[NAV] {what}: confirmed before, going without the wait.")
     else:
         action = _show_navigator(cap, route, clicks, what)
         if action == 'manual':
@@ -783,7 +793,8 @@ def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None):
                 _save_route(soc, name, route, None)
                 print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
                 _close(NAV_WINDOW)
-                send('OK', 2)
+                if press_ok:
+                    send('OK', 2)
                 return
         elif action == 'replan':
             chosen = _select_plan(cap, what)
@@ -794,14 +805,17 @@ def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None):
                     _save_route(soc, name, route, None)
                     print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
                     _close(NAV_WINDOW)
-                    send('OK', 2)
+                    if press_ok:
+                        send('OK', 2)
                     return
             else:
                 route, clicks = list(chosen[0]), _clicks_of(chosen)
                 _save_route(soc, name, route, clicks)
                 print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
-    print(f"[NAV] -> {what}: {', '.join(route) or 'no move'} + OK")
+    print(f"[NAV] -> {what}: {', '.join(route) or 'no move'}" + (" + OK" if press_ok else " (focus only)"))
     ok, _, _ = _move_and_check(send, cap, route, clicks, what)
+    if ok is not False:
+        CONFIRMED_ROUTES.add((soc, name))              # worked once: later uses go without the wait
     while ok is False:
         print(f"[NAV] The focus was not seen on {what}.")
         answer = _ask_on_screen(cap, [(f"Focus NOT seen on {what}", (0, 0, 255), 0.8),
@@ -830,7 +844,8 @@ def navigate_from_home(send, cap, soc, name, what, fallback, open_start=None):
             print(f"[NAV] Route to {what} saved for {soc}: {', '.join(route) or 'no move'}.")
             break
     _close(NAV_WINDOW)
-    send('OK', 2)
+    if press_ok:
+        send('OK', 2)
 
 
 def _measure_freeze_cut(capture, screen, run_idx, out_dir, timeout, key_at, pre_frames):
@@ -992,6 +1007,9 @@ AREA_BLACK_FRAMES = 3           # black = this many frames in a row at the black
 # the frame chosen at setup may read ~3): a drop to AREA_BLACK_RATIO of it and by AREA_BLACK_DROP at least.
 AREA_BLACK_RATIO = 0.5
 AREA_BLACK_DROP = 30
+# ... and the whole TV screen must be dark too: right at the cut the black screen reads 14-35 (the exposure
+# lifts it to 60-90 later), while dark scenes of the old channel stayed >= 67 (2026-11-09 NtP / PtP).
+AREA_SCREEN_BLACK = 45
 
 
 def _area_gray(frame, box):
@@ -1060,7 +1078,7 @@ def ensure_black_area(cap, soc, name, what, change_once, back):
     return settings['models'][soc]['black_areas'][name]
 
 
-def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at, pre_frames):
+def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at, pre_frames, screen=None):
     """Time from the key until the picture fills the black area (after the area went black)."""
     import Omedia_TC02 as channel
     box = area['box']
@@ -1076,10 +1094,16 @@ def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at,
     recent = [float(_area_gray(f, box).mean()) for t, f, _ in pre_frames if t >= key_at - 0.5] or              [float(_area_gray(f, box).mean()) for _, f, _ in list(pre_frames)[-15:]]
     before = float(np.median(recent)) if recent else None
     black_limit = dark_limit if before is None else max(dark_limit, min(before * AREA_BLACK_RATIO, before - AREA_BLACK_DROP))
-    if before is not None and before - AREA_BLACK_DROP <= dark_limit:
-        print(f"[RUN {run_idx}] The area is already dark before the key ({before:.0f}); black is not required.")
+    screen_levels = [channel.screen_brightness(f, screen) for t, f, _ in pre_frames if t >= key_at - 0.5] if screen else []
+    screen_before = float(np.median(screen_levels)) if screen_levels else None
+    # an old picture already this dark cannot be told from the black screen: then only the area counts
+    screen_check = screen is not None and (screen_before is None or screen_before > AREA_SCREEN_BLACK)
+    print(f"[RUN {run_idx}] Area before the key {before if before is None else round(before)}, black <= {black_limit:.0f}"
+          + (f"; black = whole screen <= {AREA_SCREEN_BLACK}" if screen_check else "") + ".")
+    if before is not None and before <= dark_limit and not screen_check:
+        # only an old picture as black as the black screen (area and whole screen) skips the black
+        print(f"[RUN {run_idx}] The picture is already black before the key ({before:.0f}); black is not required.")
         phase = 'black'
-    print(f"[RUN {run_idx}] Area before the key {before if before is None else round(before)}, black <= {black_limit:.0f}.")
     landed_ms, stop_at, count, last_ms, change = None, None, 0, 0.0, 0.0
     print(f"[RUN {run_idx}] Waiting for the area to go black, then fill with the picture...")
     try:
@@ -1096,14 +1120,23 @@ def _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at,
             level = float(current.mean())
             if landed_ms is None:
                 if phase == 'waiting for black':
-                    dark_run = dark_run + 1 if ms >= CUT_MIN_REACTION_MS and level <= black_limit else 0
+                    # black = the whole TV screen goes dark (14-35 at the cut; the area itself may read ~40 from
+                    # reflections); without a screen box, the area dropping to its black limit
+                    if screen_check:
+                        dark = channel.screen_brightness(frame, screen) <= AREA_SCREEN_BLACK
+                    else:
+                        dark = level <= black_limit
+                    dark_run = dark_run + 1 if ms >= CUT_MIN_REACTION_MS and dark else 0
                     if dark_run >= AREA_BLACK_FRAMES:
                         phase, history = 'black', [(ms, current)]
                 else:
                     if not history:
                         history = [(ms, current)]
                     def moved(a, ref):
-                        return max(_pattern(a, ref), abs(float(a.mean()) - float(ref.mean())) * AREA_FILL_STEP / AREA_FILL_RISE)
+                        # the picture arriving: new pattern, or brighter (getting darker never counts)
+                        rise = float(a.mean()) - float(ref.mean())
+                        pattern = _pattern(a, ref) if rise > -AREA_ONSET_STEP else 0.0
+                        return max(pattern, rise * AREA_FILL_STEP / AREA_FILL_RISE)
                     history = (history + [(ms, current)])[-60:]
                     earlier = [(t, a) for t, a in history if t <= ms - AREA_STEP_MS]
                     if candidate is None:
@@ -1159,7 +1192,8 @@ def measure_black_area(cap, press_key, soc, name, out_dir, timeout, run_idx, run
         pre_frames, _, _ = channel.capture_pre_roll(capture, area['box'])
         capture.clear_buffer()
         key_at = press_key()
-        result = _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at, pre_frames)
+        screen = (_settings()['models'].get(soc) or {}).get('screen')
+        result = _measure_black_area_frames(capture, area, run_idx, out_dir, timeout, key_at, pre_frames, screen)
     finally:
         capture.stop()
     detected = result['status'] == 'PASS'

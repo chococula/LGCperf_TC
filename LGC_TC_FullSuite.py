@@ -16,6 +16,7 @@ from kasa import SmartPlug
 import sys
 import lgc_similarity
 import lgc_lineup
+import lgc_apps
 import suite_progress
 from config_store import remembered_input
 
@@ -849,33 +850,27 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
 
     print("\n[SETUP] Installing/launching Amazon...")
     send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon',
+                         legacy=lambda: (send_key(ser, 'OK', 2), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 2), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
 
     print("\n[SETUP] Installing/launching Netflix...")
     send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
     wait_for_app_ready(cap, motion_timeout=3, stable_timeout=7)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
+                         legacy=lambda: (send_key(ser, 'OK', 3), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[SETUP] Launching YouTube...")
     send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'DpadRt', 1)
-    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
+                         legacy=lambda: (send_key(ser, 'OK', 2), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 2), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(60, "YouTube Video Playback")
 
     results = []
@@ -902,32 +897,26 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
 
         print("\n[STEP 4] Launching Amazon...")
         send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-        send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
+        lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+        lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Amazon',
+                             legacy=lambda: (send_key(ser, 'OK', 2), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                             send_key(ser, 'OK', 2), wait_for_screen_stable(cap, timeout=30)))
         wait_with_countdown_noKeyInput(60, "Amazon Video Playback")
 
         print("\n[STEP 5] Launching Netflix...")
         send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-        send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-        send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+        lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+        lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
+                             legacy=lambda: (send_key(ser, 'OK', 3), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                             send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
         wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
         print("\n[STEP 6] Launching YouTube...")
         send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'DpadRt', 1)
-        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-        send_key(ser, 'OK', 2); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-        send_key(ser, 'OK', 2); wait_for_screen_stable(cap, timeout=30)
+        lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+        lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
+                             legacy=lambda: (send_key(ser, 'OK', 2), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                             send_key(ser, 'OK', 2), wait_for_screen_stable(cap, timeout=30)))
         wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
         print("\n[STEP 7] Returning to Home...")
@@ -935,7 +924,7 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
         wait_with_countdown_noKeyInput(30, "Home Screen")
 
         print("\n[STEP 8] Entering LG Channels - measuring load time...")
-        send_key(ser, 'DpadRt', 2)
+        lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'LG Channels')
 
         result = perform_motion_detection(ser, cap, run_idx, cycle_dir, timeout, config, trigger_key='OK')
         if result:
@@ -975,21 +964,18 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
 
     print("\n[STEP 5] Launching Netflix...")
     send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
+                         legacy=lambda: (send_key(ser, 'OK', 3), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
     send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-    send_key(ser, 'OK', 3); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
+                         legacy=lambda: (send_key(ser, 'OK', 3), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                         send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
     print("\n[STEP 7] Returning to Home...")
@@ -997,13 +983,13 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(30, "Home Screen")
 
     print("\n[STEP 8] Before PIP is on...")
-    send_key(ser, 'DpadDn', 2)
+    lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Live TV PIP')
     send_key(ser, 'OK', 3)
     
 
     print("\n[STEP 9] Entering LG Channels - measuring load time...")
     send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 2)
+    lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'LG Channels')
 
     result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
     save_result(result, ts_run, csv_path, 'TC11')
@@ -1039,21 +1025,18 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
 
     print("\n[STEP 5] Launching Netflix...")
     send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=45)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_screen_stable(cap, timeout=45)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
+                         legacy=lambda: (send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30),
+                                         send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
     print("\n[STEP 6] Launching YouTube...")
     send_key(ser, 'Home', 3); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'DpadRt', 2)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=45)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
-    send_key(ser, 'OK', 3); wait_for_screen_stable(cap, timeout=30)
+    lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_screen_stable(cap, timeout=45)
+    lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
+                         legacy=lambda: (send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30),
+                                         send_key(ser, 'OK', 3), wait_for_screen_stable(cap, timeout=30)))
     wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
     print("\n[STEP 7] Returning to Home...")
@@ -1061,14 +1044,14 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     wait_with_countdown_noKeyInput(60, "Home Screen")
 
     print("\n[STEP 8] PIP → Full Screen...")
-    send_key(ser, 'DpadDn', 2)
+    lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Live TV PIP')
     wait_with_countdown_noKeyInput(50, "PIP to Alive")
     send_key(ser, 'OK', 3)
     wait_with_countdown_noKeyInput(10, "PIP to Full Screen")
 
     print("\n[STEP 9] Entering LG Channels - measuring load time...")
     send_key(ser, 'Home', 2); wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
-    send_key(ser, 'DpadRt', 2)
+    lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'LG Channels')
 
     result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config, trigger_key='OK')
     save_result(result, ts_run, csv_path, 'TC12')
@@ -1302,6 +1285,11 @@ def main():
         # TC03 / TC04 enter Live TV from Home ~4 min into the run (after the AC cycle): ask the route now
         lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
                                         'tc03_pip_live_tv', "the Live TV (PIP) on Home", ['Down'])
+    real_world = [label for label in ('TC10', 'TC11', 'TC12') if label in selected_tcs]
+    if real_world:
+        # TC10-12: every app they use is opened once by the navigator and confirmed installed / signed in
+        lgc_apps.check_apps(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                            lgc_apps.apps_for(real_world))
     if any(label in selected_tcs for label in ('TC05_NtN', 'TC05_NtP', 'TC05_PtP')):
         # TC05_NtN / NtP open LG Channels, then LIVE, ~4 min into the run: check both routes now
         lgc_similarity.plan_route_from_home(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],

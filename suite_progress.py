@@ -9,6 +9,7 @@ import winsound
 
 import cv2
 import hangul_keys  # noqa: F401  keys typed in Korean mode count as the Latin key (y for ㅛ)
+import lgc_sound  # noqa: F401  every beep is heard on a Bluetooth soundbar (silence in front to wake it)
 import numpy as np
 
 WINDOW = "LGC FullSuite"
@@ -39,14 +40,14 @@ state = {'tc_index': 0, 'tc_total': 0, 'tc_label': '', 'run_idx': 1, 'runs': 1,
 # ---------- sounds ----------
 
 def _tones(*notes):
-    for frequency, ms in notes:
-        winsound.Beep(frequency, ms)
+    lgc_sound.play(*notes)               # one sound, so a Bluetooth output does not drop the first notes
 
 
 def sound(event):
     """tc_start, countdown_start, tick (last 3 s), countdown_end, ac_off, ac_on, attention, tc_done, all_done."""
     _tones(*{
         'tc_start': ((660, 120), (880, 120), (1100, 160)),
+        'step': ((880, 90), (1320, 140)),          # every step of a TC run starts
         'countdown_start': ((1000, 150),),
         'tick': ((900, 80),),
         'countdown_end': ((1500, 250),),
@@ -77,12 +78,13 @@ def begin_run(run_idx, steps, phase=''):
 
 
 def step(kind, name):
-    """The next step starts (a timed wait, an AC power cycle or a measurement)."""
+    """The next step starts (a timed wait, an AC power cycle or a measurement): a sound for every step."""
     state['step'] += 1
     state['step_name'] = name
     if state['step'] > len(state['steps']):            # an extra step the dry run did not see (one-time setup)
         state['steps'].append((kind, name, 0))
     print(f"\n[{header()}] {name}")
+    sound('step')
 
 
 def header():
@@ -113,8 +115,7 @@ def countdown(seconds, name, as_step=True):
     """A timed wait (one step unless as_step=False): camera view with TC / step / time left, console line,
     ticks in the last 3 s."""
     if as_step:
-        step('wait', name)
-        sound('countdown_start')
+        step('wait', name)                     # the step sound marks the start
     seconds = quick_seconds(seconds, name)
     camera = state['camera']
     end = time.perf_counter() + seconds
@@ -192,6 +193,9 @@ def plan_steps(module, run_fn, args, extra_patches=()):
         (module, 'prepare_channel_landing', lambda *a, **k: None),
         (module, 'prepare_black_area', lambda *a, **k: None),
         (module, 'show_tc05_channels', lambda *a, **k: None),
+        (getattr(module, 'lgc_apps', None), 'open_app', lambda *a, **k: None),
+        (getattr(module, 'lgc_apps', None), 'focus_app', lambda *a, **k: None),
+        (getattr(module, 'lgc_apps', None), 'play_in_app', lambda *a, **k: None),
     ] + list(extra_patches)
     saved = []
     for obj, name, fn in patches:
@@ -221,6 +225,7 @@ def _scratch():
 DIGIT_KEYS = {**{f'Num_0{d}': str(d) for d in range(10)}, 'DASH': '-'}
 CHANGE_DIFF = 12.0            # mean change of the screen (1/8 size, gray) that means a new picture / black
 CHANGE_SECONDS = 8.0
+CONFIRMED_CHANNELS = set()    # quick flow check: channels the user confirmed in this run (not asked again)
 _entry = {'digits': '', 'before': None, 'busy': False}
 
 
@@ -296,8 +301,8 @@ def _verify_channel(channel, before, send):
                   "received). Check the TV.")
     elif changed:
         print(f"[CHANNEL CHECK] Channel {channel}: the screen changed.")
-    if not QUICK['on'] or state['camera'] is None:
-        return
+    if not QUICK['on'] or state['camera'] is None or channel in CONFIRMED_CHANNELS:
+        return                                 # a channel confirmed once is not asked again
     sound('attention')                         # quick flow check: the user confirms the channel
     print(f"[CHANNEL CHECK] Is the TV on channel {channel}?  ENTER = yes, R = send it again, Q = stop")
     while True:
@@ -308,6 +313,7 @@ def _verify_channel(channel, before, send):
         key = cv2.waitKey(50) & 0xFF
         if key in (10, 13):
             print(f"[CHANNEL CHECK] Channel {channel}: confirmed.")
+            CONFIRMED_CHANNELS.add(channel)
             return
         if key in (ord('r'), ord('R')):
             _send_channel(channel, send)

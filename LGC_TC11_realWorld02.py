@@ -14,6 +14,7 @@ from kasa import SmartPlug
 import sys
 from config_store import remembered_input
 import lgc_similarity
+import lgc_apps
 import suite_progress
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC11_realWorld02_inputs.json).
@@ -95,22 +96,6 @@ def get_user_configuration():
         print(f"  {key.upper():<15}: {value}")
     print("="*60 + "\n")
     
-    # Pre-flight checklist
-    print("\n" + "="*60)
-    print("  Pre-flight Checklist")
-    print("="*60)
-    print("  App order on Home bar (left to right):")
-    print("    [1] LG Channels  [2] YouTube  [3] Netflix  [4] Amazon")
-    print("")
-    print("  Please confirm the following before proceeding:")
-    print("    ① Apps are arranged in the order above")
-    print("    ② YouTube / Netflix / Amazon are all signed in")
-    print("="*60)
-    checklist_ok = input("All items confirmed? (Y/n): ").strip().lower()
-    if checklist_ok == 'n':
-        print("❌ Please set up apps correctly and re-run.")
-        sys.exit(0)
-
     confirm = input("Confirm configuration and proceed? (Y/n): ").strip().lower()
     if confirm != 'n':
         return config
@@ -352,9 +337,14 @@ def main():
     # Initialize camera
     cap = initialize_camera()
     suite_progress.begin_tc(1, 1, "TC11_realWorld02", num_runs, cap)
+    quick = suite_progress.ask_quick()
+
+    # The apps this TC uses: navigator route from Home + installed / signed in, checked on the camera
+    lgc_apps.check_apps(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'],
+                        lgc_apps.apps_for(['TC11']))
     
     # CSV path
-    csv_path = "tv_response.csv"
+    csv_path = "tv_response_QUICK.csv" if quick else "tv_response.csv"
     results = []
     
     print(f"\n{'='*60}")
@@ -403,22 +393,19 @@ def main():
             # Step 3: Netflix (3rd app: LGC > YT > Netflix), play 1 min
             print("\n[STEP 5] Launching Netflix...")
             send_key(ser, 'Home', 3)
-            send_key(ser, 'DpadRt', 2)
-            send_key(ser, 'DpadRt', 2)
-            send_key(ser, 'DpadRt', 2)
-            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+            lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+            lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Netflix',
+                                 legacy=lambda: (send_key(ser, 'OK', 0), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                                 send_key(ser, 'OK', 0), wait_for_screen_stable(cap, timeout=30)))
             wait_with_countdown_noKeyInput(60, "Netflix Video Playback")
 
             # Step 6: YouTube (2nd app), play 3 min
             print("\n[STEP 6] Launching YouTube...")
             send_key(ser, 'Home', 3)
-            send_key(ser, 'DpadRt', 2)
-            send_key(ser, 'DpadRt', 2)
-            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
-            send_key(ser, 'OK', 0); wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30)
-            send_key(ser, 'OK', 0); wait_for_screen_stable(cap, timeout=30)
+            lgc_apps.open_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube'); wait_for_app_ready(cap, motion_timeout=20, stable_timeout=60)
+            lgc_apps.play_in_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'YouTube',
+                                 legacy=lambda: (send_key(ser, 'OK', 0), wait_for_app_ready(cap, motion_timeout=10, stable_timeout=30),
+                                                 send_key(ser, 'OK', 0), wait_for_screen_stable(cap, timeout=30)))
             wait_with_countdown_noKeyInput(180, "YouTube Video Playback")
 
             # Step 7: Home, wait 30s
@@ -428,13 +415,13 @@ def main():
 
             # Step 8: PIP Launching
             print("\n[STEP 8] Entering PIP. Switching before fullscreen...")
-            send_key(ser, 'DpadDn', 2)
+            lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'Live TV PIP')
             send_key(ser, 'OK', 1)
 
             # Step 9: LG Channels (1st app)
             print("\n[STEP 9] Entering LG Channels - measuring load time...")
             send_key(ser, 'Home', 2)
-            send_key(ser, 'DpadRt', 2)
+            lgc_apps.focus_app(lambda key, delay: send_key(ser, key, delay), cap, config['SoC'], 'LG Channels')
 
             result = perform_motion_detection(ser, cap, run_idx, dir_path, timeout, config)
 
