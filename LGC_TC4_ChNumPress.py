@@ -326,7 +326,8 @@ def main():
         send_key(ser, 'ChUp', 0)
         wait_with_countdown_noKeyInput(10, "Back on the channel")
 
-    for run_idx in range(1, num_runs + 1):
+    for run_idx in suite_progress.run_passes(num_runs):   # quick: run 0 first (short waits), then exact times
+        csv_path = suite_progress.csv_for("tv_response.csv")
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
         print(f"{'='*60}")
@@ -357,7 +358,8 @@ def main():
                                               mode='channel')
 
             if result:
-                results.append(result)
+                if run_idx:                      # not the quick pass
+                    results.append(result)
 
                 # Save to CSV
                 if result['detected']:

@@ -893,10 +893,10 @@ def run_tc10(ser, cap, config, run_idx, csv_path):
         wait_with_countdown_noKeyInput(60, "Live TV Fox 36-1")
 
         suite_progress.announce("\n[STEP 2] DC Power Cycle (OFF 2 min)...")
-        send_key(ser, 'P_OFF', 0)
-        wait_with_countdown_noKeyInput(120, "DC Power cycle for 2m")
-        send_key(ser, 'P_ON', 0)
-        wait_with_countdown_noKeyInput(60, "DC Power cycle for 1m")
+        suite_progress.dc_power(ser, False)
+        wait_with_countdown_noKeyInput(120, "DC power OFF 2 min")
+        suite_progress.dc_power(ser, True)
+        wait_with_countdown_noKeyInput(60, "DC power ON 1 min")
 
         suite_progress.announce("\n[STEP 4] Launching Amazon...")
         send_key(ser, 'Home', 2);wait_for_app_ready(cap, motion_timeout=5, stable_timeout=10)
@@ -954,9 +954,9 @@ def run_tc11(ser, cap, config, run_idx, csv_path):
     channel = config.get('tc11_channel', TC11_CHANNEL)
 
     suite_progress.announce("\n[STEP 1] DC Power cycle (OFF 2 min)...")
-    send_key(ser, 'P_OFF', 0)
+    suite_progress.dc_power(ser, False)
     wait_with_countdown_noKeyInput(120, "DC power OFF 2 min")
-    send_key(ser, 'P_ON', 0)
+    suite_progress.dc_power(ser, True)
     wait_with_countdown_noKeyInput(60, "DC power ON 1 min")
 
     suite_progress.announce(f"\n[STEP 2] Live TV channel {channel}...")
@@ -1010,9 +1010,9 @@ def run_tc12(ser, cap, config, run_idx, csv_path):
     channel = config.get('tc11_channel', TC11_CHANNEL)
 
     suite_progress.announce("\n[STEP 1] DC Power cycle (OFF 2 min)...")
-    send_key(ser, 'P_OFF', 0)
+    suite_progress.dc_power(ser, False)
     wait_with_countdown_noKeyInput(120, "DC power OFF 2 min")
-    send_key(ser, 'P_ON', 0)
+    suite_progress.dc_power(ser, True)
     wait_with_countdown_noKeyInput(60, "DC power ON 1 min")
 
     suite_progress.announce(f"\n[STEP 2] Live TV channel {channel}...")
@@ -1305,7 +1305,8 @@ def main():
                                             start_name='LG Channels')
 
     ts_session = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}{'_QUICK' if quick else ''}.csv"
+    csv_path = f"C:/Temp/LGC_FullSuite_{ts_session}.csv"
+    quick_csv = f"C:/Temp/LGC_FullSuite_{ts_session}_QUICK.csv"
     os.makedirs("C:/Temp", exist_ok=True)
 
     all_results = []
@@ -1332,23 +1333,32 @@ def main():
             continue
 
         tc_results = []
-        for run_idx in range(1, tc_runs + 1):
+        # quick flow check: run 0 of this TC first (short waits, every check asked), then the runs with the
+        # exact times (nothing confirmed in the quick pass is asked again)
+        for run_idx in ([0] if quick else []) + list(range(1, tc_runs + 1)):
+            if quick and run_idx == 1:
+                suite_progress.end_quick(tc_runs)
+            suite_progress.QUICK['on'] = quick and run_idx == 0
+            run_csv = quick_csv if run_idx == 0 else csv_path
             print(f"\n{'='*60}")
-            print(f"  [{tc_label}] RUN {run_idx}/{tc_runs}")
+            print(f"  [{tc_label}] " + ("QUICK FLOW CHECK (run 0)" if run_idx == 0 else f"RUN {run_idx}/{tc_runs}"))
             print(f"{'='*60}")
             suite_progress.begin_run(run_idx, suite_progress.plan_steps(
-                sys.modules[__name__], run_fn, (ser, cap, config, run_idx, csv_path),
-                [(lgc_similarity, 'navigate_from_home', lambda *a, **k: None)]))
+                sys.modules[__name__], run_fn, (ser, cap, config, run_idx, run_csv),
+                [(lgc_similarity, 'navigate_from_home', lambda *a, **k: None)]),
+                phase='Quick check' if run_idx == 0 else '')
             try:
-                result = run_fn(ser, cap, config, run_idx, csv_path)
-                if isinstance(result, list):
+                result = run_fn(ser, cap, config, run_idx, run_csv)
+                if run_idx == 0:
+                    pass                                       # quick pass: not in the results
+                elif isinstance(result, list):
                     tc_results.extend([r for r in result if r])
                 elif result:
                     tc_results.append(result)
             except Exception as e:
                 print(f"❌ Error in {tc_label} run {run_idx}: {e}")
 
-            if run_idx < tc_runs:
+            if run_idx < tc_runs and tc_label not in ('TC10', 'TC11', 'TC12'):   # TC10-12: no interval
                 wait_with_countdown_noKeyInput(10, "Interval between runs")
                 if tc_label in TC_BETWEEN_RUNS_MAP:
                     try:

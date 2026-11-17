@@ -364,7 +364,8 @@ def main():
     print(f"{'='*60}\n")
     
     # Main test loop
-    for run_idx in range(1, num_runs + 1):
+    for run_idx in suite_progress.run_passes(num_runs):   # quick: run 0 first (short waits), then exact times
+        csv_path = suite_progress.csv_for("tv_response.csv")
         print(f"\n{'='*60}")
         print(f"  [RUN {run_idx}/{num_runs}] Starting")
         print(f"{'='*60}")
@@ -385,9 +386,9 @@ def main():
 
             # Step 1: DC off 2 min -> DC on, 1 min
             suite_progress.announce("\n[STEP 1] DC Power cycle (OFF 2 min)...")
-            send_key(ser, 'P_OFF', 0)
+            suite_progress.dc_power(ser, False)
             wait_with_countdown_noKeyInput(120, "DC power OFF 2 min")
-            send_key(ser, 'P_ON', 0)
+            suite_progress.dc_power(ser, True)
             wait_with_countdown_noKeyInput(60, "DC power ON 1 min")
 
             # Step 2: Live TV channel (IP 195 / 597), 1 min
@@ -436,7 +437,8 @@ def main():
                                                                  config['SoC']))
 
             if result:
-                results.append(result)
+                if run_idx:                      # not the quick pass
+                    results.append(result)
 
                 if result['detected']:
                     df = pd.DataFrame({

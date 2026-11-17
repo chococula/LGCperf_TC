@@ -4,6 +4,7 @@ Before each TC run its steps (timed waits, AC power cycles, measurements) are co
 TC function with every TV, camera and plug action replaced; during the real run each such action calls
 step(), so the screen and the console show "TC 2/4 TC03 | Step 5/21 NBC 11-1 | 02:31 left".
 """
+import os
 import sys
 import time
 import winsound
@@ -20,12 +21,41 @@ BOOT_WORDS = ('power on', 'power stabilization', 'boot')    # the TV must finish
 
 
 def ask_quick():
-    answer = input("Quick flow check with short waits (check navigation / screens, results not valid)? (y/N): ")
+    answer = input("Quick flow check first (one short pass: check navigation / screens), then the runs with "
+                   "the exact times? (y/N): ")
     QUICK['on'] = answer.strip().lower() in ('y', 'yes')
     if QUICK['on']:
-        print(f"[QUICK] Waits cut to {QUICK['wait']} s (boot waits after power on to {QUICK['boot']} s); "
-              "results go to a separate *_QUICK.csv.")
+        print(f"[QUICK] First one quick pass (run 0): waits cut to {QUICK['wait']} s (boot waits after power on "
+              f"to {QUICK['boot']} s), its result goes to a separate *_QUICK.csv. Then the runs keep the exact "
+              "times and ask nothing again.")
     return QUICK['on']
+
+
+def end_quick(runs):
+    """The quick pass is over: the real runs keep the exact times (and ask nothing confirmed in the pass)."""
+    QUICK['on'] = False
+    print(f"\n[QUICK] Flow check done. Now {runs} run(s) with the exact times.")
+    sound('tc_start')
+
+
+def run_passes(num_runs):
+    """Run numbers of a standalone TC: with the quick flow check, run 0 first (short waits), then QUICK is
+    turned off and runs 1..num_runs keep the exact times. state['pass_no'] counts the passes (1 = first)."""
+    state['pass_no'] = 0
+    if QUICK['on']:
+        print("\n[QUICK] Run 0 = quick flow check (short waits).")
+        state['pass_no'] += 1
+        yield 0
+        end_quick(num_runs)
+    for run_idx in range(1, num_runs + 1):
+        state['pass_no'] += 1
+        yield run_idx
+
+
+def csv_for(path):
+    """The CSV of the current pass: the quick pass writes to *_QUICK.csv, the real runs to `path`."""
+    root, ext = os.path.splitext(path)
+    return f"{root}_QUICK{ext}" if QUICK['on'] else path
 
 
 def quick_seconds(seconds, name):
@@ -198,6 +228,7 @@ def plan_steps(module, run_fn, args, extra_patches=()):
 
     patches = [
         (sys.modules[__name__], 'announce', lambda *a, **k: None),
+        (sys.modules[__name__], 'dc_power', lambda *a, **k: True),
         (module, 'send_key', lambda *a, **k: None),
         (module, 'send_shell_command_with_debug', lambda *a, **k: None),
         (module, 'wait_with_countdown_noKeyInput', lambda seconds, description="Timer": record('wait', description, seconds)),
@@ -260,6 +291,62 @@ def _screen_small():
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame[h // 10:h * 9 // 10, w // 10:w * 9 // 10], cv2.COLOR_BGR2GRAY)
     return cv2.resize(gray, (gray.shape[1] // 8, gray.shape[0] // 8)).astype(np.float32), frame
+
+
+DC_COMMANDS = {False: b'ka 00 00\n', True: b'ka 00 01\n'}
+DC_OFF_CHECK_SECONDS = 15      # the screen must go dark this soon after DC OFF
+DC_DARK_LEVEL = 45             # mean grey of the middle of the camera picture that counts as off
+DC_DARK_RATIO = 0.5            # ... or this fraction of the level before the command
+
+
+def _dc_send(ser, on):
+    try:
+        ser.reset_input_buffer()
+    except Exception:
+        pass
+    ser.write(DC_COMMANDS[on])
+    ser.flush()
+    reply, end = b'', time.perf_counter() + 1.0
+    while time.perf_counter() < end:
+        try:
+            reply += ser.read(64)
+        except Exception:
+            break
+    text = reply.decode('ascii', 'replace').strip().replace('\r', ' ').replace('\n', ' ')
+    print(f"[DC] {'ON' if on else 'OFF'} sent ({DC_COMMANDS[on].decode().strip()}), "
+          f"TV reply: {text[-80:] if text else '(none)'}")
+
+
+def _screen_level():
+    small = _screen_small()
+    return None if small is None else float(small[0].mean())
+
+
+def dc_power(ser, on):
+    """DC power OFF / ON over the serial line (ka 00 00 / ka 00 01). OFF: the camera must see the screen go
+    dark within DC_OFF_CHECK_SECONDS; if not, the attention sound and OFF is sent once more."""
+    if on:
+        _dc_send(ser, True)
+        return True
+    for attempt in (1, 2):
+        before = _screen_level()
+        _dc_send(ser, False)
+        if before is None:
+            print("[DC] No camera: the screen going dark is not checked.")
+            return True
+        end, level = time.perf_counter() + DC_OFF_CHECK_SECONDS, before
+        while time.perf_counter() < end:
+            level = _screen_level()
+            if level is not None and (level <= DC_DARK_LEVEL or level <= before * DC_DARK_RATIO):
+                print(f"[DC] Screen off (camera level {before:.0f} -> {level:.0f}).")
+                return True
+            cv2.waitKey(1)
+            time.sleep(0.3)
+        print(f"[DC] The screen did NOT go dark after DC OFF (camera level {before:.0f} -> {level:.0f})"
+              + (": sending OFF again." if attempt == 1 else
+                 ": check the serial cable / port and RS-232 power control on the TV."))
+        sound('attention')
+    return False
 
 
 def before_key(key):
