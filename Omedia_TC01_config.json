@@ -1,0 +1,24 @@
+{
+  "manufacturer": "LG",
+  "SoC": "NU7000",
+  "SWV": "43.21.61",
+  "LGCV": "4.1.14",
+  "num_runs": 50,
+  "timeout": 20.0,
+  "home_similarity_threshold": 0.8,
+  "standby_seconds": 300,
+  "screen_rois": {
+    "43A6GV": [
+      2,
+      2,
+      634,
+      476
+    ],
+    "NU7000": [
+      7,
+      0,
+      632,
+      477
+    ]
+  }
+}

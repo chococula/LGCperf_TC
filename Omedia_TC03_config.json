@@ -1,0 +1,13 @@
+{
+  "manufacturer": "Samsung",
+  "SoC": "U8000",
+  "SWV": "1300",
+  "LGCV": "8.2.008",
+  "num_runs": 5,
+  "timeout": 30.0,
+  "plug_ip": "192.168.5.3",
+  "ac_off_seconds": 10,
+  "home_wait_seconds": 30,
+  "boot_timeout": 120.0,
+  "navigation": {}
+}

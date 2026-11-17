@@ -1,0 +1,207 @@
+{
+  "manufacturer": "LG",
+  "SoC": "NU7000",
+  "SWV": "43.21.61",
+  "LGCV": "4.1.14",
+  "num_runs": 35,
+  "timeout": 15.0,
+  "zap_interval_seconds": 8,
+  "zap_method": "ChUp",
+  "tv_ip": "192.168.4.140",
+  "zap_direction": "Up",
+  "detector": "EmptyArea",
+  "route": [],
+  "target_point": [
+    110,
+    342
+  ],
+  "plan_steps": {
+    "2": {
+      "clicks": [
+        [
+          150,
+          188
+        ],
+        [
+          395,
+          305
+        ]
+      ],
+      "route": [
+        "Down",
+        "Right",
+        "Right"
+      ]
+    },
+    "3": {
+      "clicks": [
+        [
+          131,
+          161
+        ],
+        [
+          131,
+          161
+        ]
+      ],
+      "route": []
+    },
+    "1": {
+      "clicks": [
+        [
+          70,
+          297
+        ],
+        [
+          124,
+          226
+        ]
+      ],
+      "route": [
+        "Up",
+        "Right"
+      ]
+    }
+  },
+  "navigation": {
+    "U8000": {
+      "route": [
+        "Down",
+        "Down"
+      ],
+      "plan_steps": {
+        "2": {
+          "clicks": [
+            [
+              83,
+              136
+            ],
+            [
+              237,
+              359
+            ]
+          ],
+          "route": [
+            "Down",
+            "Down",
+            "Right"
+          ]
+        },
+        "3": {
+          "clicks": [
+            [
+              131,
+              161
+            ],
+            [
+              131,
+              161
+            ]
+          ],
+          "route": []
+        }
+      },
+      "stream_roi": [
+        68,
+        108,
+        147,
+        94
+      ],
+      "motion_threshold": 15.0,
+      "zap_method": "Guide",
+      "detector": "landing_area"
+    },
+    "43A6GV": {
+      "route": [],
+      "plan_steps": {
+        "1": {
+          "clicks": [
+            [
+              178,
+              161
+            ],
+            [
+              165,
+              324
+            ]
+          ],
+          "route": [
+            "Down",
+            "Down"
+          ]
+        },
+        "2": {
+          "clicks": [
+            [
+              150,
+              188
+            ],
+            [
+              395,
+              305
+            ]
+          ],
+          "route": [
+            "Down",
+            "Right",
+            "Right"
+          ]
+        }
+      },
+      "stream_roi": [
+        379,
+        123,
+        177,
+        105
+      ],
+      "motion_threshold": 15.0,
+      "zap_method": "ChUp",
+      "detector": "landing_area"
+    },
+    "NU7000": {
+      "route": [],
+      "plan_steps": {
+        "1": {
+          "clicks": [
+            [
+              70,
+              297
+            ],
+            [
+              124,
+              226
+            ]
+          ],
+          "route": [
+            "Up",
+            "Right"
+          ]
+        }
+      },
+      "stream_roi": [
+        103,
+        55,
+        457,
+        118
+      ],
+      "motion_threshold": 15.0,
+      "zap_method": "ChUp",
+      "detector": "landing_area"
+    }
+  },
+  "stream_roi": [
+    103,
+    55,
+    457,
+    118
+  ],
+  "motion_threshold": 7.992565104166667,
+  "screen_rois": {
+    "NU7000": [
+      66,
+      30,
+      562,
+      331
+    ]
+  }
+}
