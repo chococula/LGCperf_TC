@@ -18,6 +18,7 @@ import lgc_similarity
 import lgc_lineup
 import lgc_apps
 import suite_progress
+import ir_remote
 from config_store import remembered_input
 
 # The last answer to each "(default: ...)" prompt is the next default (saved in LGC_TC_FullSuite_inputs.json).
@@ -80,8 +81,17 @@ ALL_TC_LABELS = ['TC01', 'TC02', 'TC03', 'TC04',
 # ===== Shared Helper Functions =======================================
 # =====================================================================
 
+IR_REMOTE = None   # ir_remote.IrRemote when the TV is controlled by IR (Roku, Samsung, ...) instead of RS-232
+CONTROL_OPTIONS = ['RS-232'] + [f"IR {brand}" for brand in ir_remote.KEYSETS]
+
+
 def send_key(ser, key_name, delay=2):
-    if key_name in IR_KEYS:
+    if IR_REMOTE is not None:
+        suite_progress.before_key(key_name)
+        IR_REMOTE.send(key_name)
+        time.sleep(delay)
+        suite_progress.after_key(key_name, lambda key, wait: send_key(ser, key, wait))
+    elif key_name in IR_KEYS:
         suite_progress.before_key(key_name)
         ser.write(IR_KEYS[key_name])
         ser.flush()
@@ -1106,7 +1116,16 @@ def get_user_configuration(selected_tcs):
             break
         print("❌ Invalid IP format.")
 
+    # LG TVs: RS-232 (serial). Other platforms (Roku, Samsung, ...): IR through the Flirc dongle
+    print("TV control: " + "  ".join(f"{i}) {name}" for i, name in enumerate(CONTROL_OPTIONS, 1)))
     while True:
+        answer = input("Select TV control (default: 1): ").strip() or "1"
+        if answer.isdigit() and 1 <= int(answer) <= len(CONTROL_OPTIONS):
+            control = CONTROL_OPTIONS[int(answer) - 1]; break
+        print("❌ Invalid selection.")
+
+    port = None
+    while control == 'RS-232':
         port = input("Enter Serial Port (default: COM13): ").strip()
         if not port:
             port = "COM13"; break
@@ -1135,7 +1154,7 @@ def get_user_configuration(selected_tcs):
             print("❌ Invalid number.")
 
     config = {
-        'ip': ip, 'port': port,
+        'ip': ip, 'control': control, 'port': port,
         'SoC': SoC, 'SWV': SWV, 'LGCV': LGCV,
         'num_runs': num_runs, 'timeout': timeout,
     }
@@ -1274,7 +1293,18 @@ def main():
     num_runs = config['num_runs']
     port     = config['port']
 
-    ser = initialize_serial(port)
+    global IR_REMOTE
+    if config['control'] == 'RS-232':
+        ser = initialize_serial(port)
+    else:
+        ser = None
+        IR_REMOTE = ir_remote.IrRemote(config['control'].split(' ', 1)[1])
+        suite_progress.IR_POWER['send'] = lambda: IR_REMOTE.send('Power')
+        print(f"✓ TV control: {config['control']} (Flirc)")
+        missing = IR_REMOTE.missing(IR_KEYS)
+        if missing:
+            print(f"⚠ The {IR_REMOTE.brand} IR keyset has no: {', '.join(missing)}\n"
+                  "  Steps using these keys are skipped; capture them with ir_capture.py if the TCs need them.")
 
     if 'TC03' in selected_tcs or 'TC04' in selected_tcs:
         verify_t2_pga_channel_settings(config)
@@ -1392,7 +1422,8 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
-    ser.close()
+    if ser is not None:
+        ser.close()
     print("✓ All resources released.")
 
 

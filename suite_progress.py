@@ -299,7 +299,14 @@ DC_DARK_LEVEL = 45             # mean grey of the middle of the camera picture t
 DC_DARK_RATIO = 0.5            # ... or this fraction of the level before the command
 
 
+IR_POWER = {'send': None}      # set to a function when the TV is controlled by IR (Power key, a toggle)
+
+
 def _dc_send(ser, on):
+    if IR_POWER['send'] is not None:
+        IR_POWER['send']()
+        print(f"[DC] {'ON' if on else 'OFF'} sent (IR Power key, toggle)")
+        return
     try:
         ser.reset_input_buffer()
     except Exception:
